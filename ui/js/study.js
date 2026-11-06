@@ -1,5 +1,6 @@
 // 학습 탭: /Start 하면 Arcana가 스스로 공부하고, 모르는 게 생기면 질문함
 import { api } from "./api.js";
+import { attachPalette, ICONS } from "./palette.js";
 
 const $ = (s) => document.querySelector(s);
 const feed = $("#feed");
@@ -88,6 +89,16 @@ async function submit(text) {
 $("#study-form").addEventListener("submit", (e) => { e.preventDefault(); submit(input.value); });
 input.addEventListener("input", () => { sendBtn.disabled = !input.value.trim(); });
 $("#q-skip").onclick = () => submit("/Skip");
+
+// "/" 명령어 목록
+attachPalette(input, [
+  { name: "/Start", desc: "스스로 학습 시작", icon: ICONS.play, alias: ["시작"], run: () => submit("/Start") },
+  { name: "/Stop", desc: "학습 멈추기", icon: ICONS.stop, alias: ["중지"], run: () => submit("/Stop") },
+  { name: "/Status", desc: "지금까지 배운 것", icon: ICONS.chart, alias: ["상태"], run: () => submit("/Status") },
+  { name: "/Skip", desc: "지금 질문 넘기기", icon: ICONS.skip, alias: ["넘기기"], run: () => submit("/Skip") },
+  { name: "/Teach", desc: "대답 가르치기 — /Teach 말 = 대답", icon: ICONS.teach, alias: ["가르치기"], needsArgs: true },
+  { name: "/Help", desc: "명령어 설명", icon: ICONS.help, alias: ["도움말"], run: () => submit("/Help") },
+]);
 
 // ───────────── 백그라운드 학습 알림 ─────────────
 api.onEvent((e) => {

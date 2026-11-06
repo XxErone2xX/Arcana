@@ -31,7 +31,7 @@ const USER_AGENT: &str = concat!(
 );
 const FRONTIER_MAX: usize = 5000;
 const QUESTIONS_MAX: usize = 50;
-const DAILY_LIMIT: usize = 3000;
+const DAILY_LIMIT: usize = 50_000;
 const MAX_HTML: u64 = 2 * 1024 * 1024;
 
 /// 다른 언어 위키·일반 웹사이트 첫 시작점 (v0.5부터)
@@ -161,7 +161,7 @@ impl CrawlSettings {
             wiki_langs: c.wiki_langs.clone(),
             explore_web: c.explore_web,
             blocked_domains: c.blocked_domains.clone(),
-            site_delay_secs: c.site_delay_secs.max(3),
+            site_delay_secs: c.site_delay_secs,
             site_daily_limit: c.site_daily_limit.max(1),
         }
     }
@@ -1216,11 +1216,7 @@ impl Knowledge {
             loop {
                 let (on, interval, settings) = {
                     let c = config.read().unwrap();
-                    (
-                        c.self_study,
-                        c.study_interval_secs.max(5),
-                        CrawlSettings::from(&c),
-                    )
+                    (c.self_study, c.study_interval_secs, CrawlSettings::from(&c))
                 };
                 if !on {
                     std::thread::sleep(Duration::from_secs(2));
@@ -1235,7 +1231,7 @@ impl Knowledge {
                         });
                         interval
                     }
-                    Ok(Studied::Wait) => 3,
+                    Ok(Studied::Wait) => 1,
                     Ok(Studied::Idle) => {
                         events(Event::StudyLog {
                             text: "읽을 곳이 없거나 오늘 공부량을 다 채웠습니다. 잠시 쉬겠습니다."

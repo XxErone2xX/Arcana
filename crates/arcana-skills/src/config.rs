@@ -19,7 +19,7 @@ pub struct Config {
     pub show_debug: bool,
     /// 스스로 공부 중인지 (학습 탭의 /Start, /Stop). 켜두면 앱 다시 켜도 이어서 공부
     pub self_study: bool,
-    /// 자율 탐색 간격 (초). 너무 짧으면 상대 서버에 부담
+    /// 자율 탐색 간격 (초). 0 = 쉬지 않고 계속
     pub study_interval_secs: u64,
     /// 공부할 위키백과 언어들 (ko=한국어, en=영어, ja=일본어 ...)
     pub wiki_langs: Vec<String>,
@@ -27,7 +27,7 @@ pub struct Config {
     pub explore_web: bool,
     /// 절대 안 갈 사이트 (예: "example.com" → 하위 주소 전부 차단)
     pub blocked_domains: Vec<String>,
-    /// 같은 사이트 최소 간격 (초). 사이트 robots.txt 의 Crawl-delay 가 더 길면 그걸 따름
+    /// 같은 사이트 최소 간격 (초). 0 = 없음. 사이트가 robots.txt 로 Crawl-delay 를 정해 두면 그건 따름
     pub site_delay_secs: u64,
     /// 하루에 한 사이트에서 읽을 최대 페이지 수
     pub site_daily_limit: usize,
@@ -141,17 +141,17 @@ impl Default for Config {
             ),
         );
         Self {
-            version: 1,
+            version: 2,
             name: "Arcana".into(),
             threshold: 0.55,
             auto_update: true,
             show_debug: false,
             self_study: false,
-            study_interval_secs: 20,
+            study_interval_secs: 0,
             wiki_langs: vec!["ko".into(), "en".into(), "ja".into()],
             explore_web: true,
             blocked_domains: vec![],
-            site_delay_secs: 10,
+            site_delay_secs: 0,
             site_daily_limit: 100,
             brave_api_key: String::new(),
             apps,
@@ -167,14 +167,29 @@ impl Config {
     pub fn load_or_create(dir: &Path) -> Self {
         let p = Self::path(dir);
         match std::fs::read_to_string(&p) {
-            Ok(s) => serde_json::from_str(&s).unwrap_or_else(|e| {
-                // 설정 파일이 깨졌으면 백업해두고 기본값으로
-                let _ = std::fs::rename(&p, dir.join("config.broken.json"));
-                eprintln!("config.json 읽기 실패 ({e}), 기본값 사용");
-                let c = Self::default();
-                c.save(dir);
-                c
-            }),
+            Ok(s) => serde_json::from_str::<Self>(&s)
+                .map(|mut c| {
+                    // v1 → v2: 탐색 쿨타임 없앰 (예전 기본값 20초/10초 → 0초)
+                    if c.version < 2 {
+                        if c.study_interval_secs == 20 {
+                            c.study_interval_secs = 0;
+                        }
+                        if c.site_delay_secs == 10 {
+                            c.site_delay_secs = 0;
+                        }
+                        c.version = 2;
+                        c.save(dir);
+                    }
+                    c
+                })
+                .unwrap_or_else(|e| {
+                    // 설정 파일이 깨졌으면 백업해두고 기본값으로
+                    let _ = std::fs::rename(&p, dir.join("config.broken.json"));
+                    eprintln!("config.json 읽기 실패 ({e}), 기본값 사용");
+                    let c = Self::default();
+                    c.save(dir);
+                    c
+                }),
             Err(_) => {
                 let c = Self::default();
                 c.save(dir);

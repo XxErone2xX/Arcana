@@ -1,4 +1,5 @@
 import { api } from "./api.js";
+import { attachPalette, ICONS } from "./palette.js";
 
 const $ = (s) => document.querySelector(s);
 const log = $("#log");
@@ -151,6 +152,14 @@ input.addEventListener("keydown", (e) => {
   if (e.key === "Escape") input.value = "";
   sendBtn.disabled = !input.value.trim();
 });
+
+// 대화 탭 "/" 명령어 목록
+attachPalette(input, [
+  { name: "/Learn", desc: "학습 탭으로 가기", icon: ICONS.book, alias: ["학습"], run: () => document.querySelector('.tab[data-view="study"]').click() },
+  { name: "/Clear", desc: "대화 내용 지우기", icon: ICONS.clear, alias: ["지우기"], run: () => { log.replaceChildren(); addMsg("bot", "대화 내용을 지웠습니다."); } },
+  { name: "/Settings", desc: "메뉴·설정 열기", icon: ICONS.gear, alias: ["설정"], run: () => $("#btn-menu").click() },
+  { name: "/Help", desc: "할 수 있는 일 보기", icon: ICONS.help, alias: ["도움말"], run: () => submit("뭐 할 수 있어?") },
+]);
 
 for (const s of SUGGESTIONS) {
   const b = button(s, "");

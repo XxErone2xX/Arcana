@@ -287,7 +287,7 @@ impl Assistant {
                 "start" | "시작" => {
                     set_running(true);
                     lines.push("학습을 시작합니다. 앱이 켜져 있는 동안 위키백과(한국어·영어·일본어)와 여러 웹사이트를 조금씩 읽으며 공부하겠습니다.".into());
-                    lines.push("사이트 규칙(robots.txt)을 지키고, 같은 사이트는 천천히 읽으며, 위험한 사이트는 건너뜁니다.".into());
+                    lines.push("쉬지 않고 계속 읽습니다. 사이트 규칙(robots.txt)은 지키고, 위험한 사이트는 건너뜁니다.".into());
                     lines.push("모르는 게 생기면 여기서 여쭤보겠습니다.".into());
                 }
                 "stop" | "중지" | "멈춰" => {
