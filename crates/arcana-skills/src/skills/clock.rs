@@ -24,10 +24,10 @@ impl Skill for Clock {
             } else {
                 n.hour() % 12
             };
-            Reply::say(format!("지금 {ampm} {h}시 {}분이야.", n.minute()))
+            Reply::say(format!("지금은 {ampm} {h}시 {}분입니다.", n.minute()))
         } else {
             Reply::say(format!(
-                "오늘은 {}년 {}월 {}일 {}요일이야.",
+                "오늘은 {}년 {}월 {}일 {}요일입니다.",
                 n.year(),
                 n.month(),
                 n.day(),

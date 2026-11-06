@@ -323,6 +323,17 @@ def generate(n_per_intent=1200, seed=0):
     for _ in range(400):  # 키보드 막 친 영어/한글
         s = rand_word() if random.random() < 0.5 else "".join(random.choice("qwertyuiopasdfghjklzxcvbnm") for _ in range(random.randint(2, 10)))
         data.append((s, ["O"] * len(s), "unknown"))
+    # 대화 데이터의 사용자 말 → "명령 아님"(unknown) 예시로 추가 → 잡담은 대화 모델로 넘어감
+    # (인사/감사/작별/자기소개 주제는 원래 의도가 따로 있어서 제외)
+    import chat_data
+    skip_words = ("안녕", "좋은 아침", "잘 자", "나 왔어", "고마워", "너 누구야", "미안", "응", "아니", "누가 만들었어")
+    topics = [t for t in chat_data.TOPICS if not any(w in t[0] for w in skip_words)]
+    vals = chat_data.SLOTS
+    for _ in range(n_per_intent * 2):
+        users, _r = random.choice(topics)
+        u = chat_data.render(random.choice(users), {k: random.choice(v) for k, v in vals.items()})
+        u = random.choice(chat_data.NOISE_PRE) + u + random.choice(chat_data.NOISE_SUF)
+        data.append((u, ["O"] * len(u), "unknown"))
     random.shuffle(data)
     return data
 

@@ -80,7 +80,9 @@ impl Skill for Timer {
             .and_then(|t| parse_duration(t))
             .or_else(|| parse_duration(&cx.text));
         let Some(sec) = sec else {
-            return Reply::error("몇 분 뒤인지 못 알아들었어. '5분 타이머'처럼 말해줘.");
+            return Reply::error(
+                "시간을 잘 알아듣지 못했습니다. '5분 타이머'처럼 말씀해 주십시오.",
+            );
         };
         let label = fmt_duration(sec);
         let events = cx.events.clone();
@@ -89,10 +91,10 @@ impl Skill for Timer {
             std::thread::sleep(std::time::Duration::from_secs(sec));
             events(Event::Alert {
                 title: "타이머".into(),
-                body: format!("{l} 지났어!"),
+                body: format!("{l}이 지났습니다."),
             });
         });
-        Reply::say(format!("{label} 뒤에 알려줄게."))
+        Reply::say(format!("{label} 뒤에 알려 드리겠습니다."))
     }
 }
 

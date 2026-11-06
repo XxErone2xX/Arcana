@@ -6,12 +6,21 @@ use std::sync::Arc;
 fn main() {
     let brain = arcana_core::builtin::load().expect("모델 로드 실패");
     let dir = std::env::temp_dir().join("arcana-cli");
+    let talker = arcana_core::builtin::load_chat()
+        .ok()
+        .map(|t| Arc::new(t) as Arc<dyn arcana_core::Talker>);
     let a = Assistant::new(
         Box::new(brain),
+        talker,
         dir,
         Arc::new(|e| println!("\n[알림] {e:?}")),
     );
-    println!("{} — 빠진 스킬: {:?}", a.brain_name(), a.missing_skills());
+    println!(
+        "{} / {:?} — 빠진 스킬: {:?}",
+        a.brain_name(),
+        a.talker_name(),
+        a.missing_skills()
+    );
     let stdin = std::io::stdin();
     loop {
         print!("> ");

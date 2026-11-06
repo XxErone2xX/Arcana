@@ -1,4 +1,5 @@
-//! 인사, 감사, 자기소개 같은 대화
+//! 대화: 명령이 아닌 말은 Arcana 대화 모델이 직접 대답을 만들어냄.
+//! (대화 모델이 없으면 정해진 문장으로 대답)
 
 use crate::{Context, Reply, Skill};
 use arcana_core::Understanding;
@@ -6,7 +7,6 @@ use arcana_core::Understanding;
 pub struct Chat;
 
 fn pick<'a>(opts: &[&'a str]) -> &'a str {
-    // 랜덤 라이브러리 없이 시간으로 대충 고르기
     let n = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.subsec_nanos())
@@ -18,31 +18,36 @@ impl Skill for Chat {
     fn intents(&self) -> &[&'static str] {
         &["greet", "thanks", "bye", "who_are_you", "unknown"]
     }
+
     fn describe(&self) -> &'static str {
-        ""
+        "대화 — \"배고파\", \"오늘 너무 피곤해\", \"재밌는 얘기 해줘\""
     }
+
     fn run(&self, intent: &str, _: &Understanding, cx: &Context) -> Reply {
         let name = cx.cfg().name.clone();
         match intent {
-            "greet" => Reply::say(pick(&[
-                "어 왔어? 뭐 해줄까?",
-                "ㅎㅇ 뭐 필요해?",
-                "왔구나. 시킬 거 있어?",
-            ])),
-            "thanks" => Reply::say(pick(&["별말을 다 ㅋㅋ", "ㅇㅋ 언제든", "이 정도야 뭐"])),
             "bye" => Reply {
-                text: "ㅂㅇ 나중에 또 불러.".into(),
+                text: "네, 필요하시면 언제든 다시 불러 주십시오.".into(),
                 quit: true,
                 ..Default::default()
             },
             "who_are_you" => Reply::say(format!(
-                "나는 {name}, 네 PC 비서야. 왼쪽 위 ☰ 눌러보면 할 수 있는 거 다 나와."
+                "저는 {name}입니다. 이 PC에서 일하는 비서입니다.\n왼쪽 위 메뉴(☰)를 누르시면 제가 할 수 있는 일을 보실 수 있습니다."
             )),
-            _ => Reply::say(pick(&[
-                "그건 아직 못 배웠어.",
-                "음.. 무슨 말인지 모르겠어. (\"뭐 할 수 있어?\"라고 물어봐)",
-                "그건 내 능력 밖이야 아직은.",
-            ])),
+            _ => {
+                // 인사, 감사, 잡담 → 대화 모델이 직접 대답
+                if let Some(t) = &cx.talker {
+                    let r = t.reply(&cx.text);
+                    if !r.trim().is_empty() {
+                        return Reply::say(r.trim());
+                    }
+                }
+                Reply::say(match intent {
+                    "greet" => pick(&["안녕하세요. 무엇을 도와드릴까요?", "반갑습니다. 필요한 게 있으시면 말씀해 주십시오."]),
+                    "thanks" => pick(&["별말씀을요. 언제든 불러 주십시오.", "도움이 됐다니 다행입니다."]),
+                    _ => pick(&["죄송합니다. 그건 아직 배우지 못했습니다.", "잘 이해하지 못했습니다. 다르게 말씀해 주시겠습니까?"]),
+                })
+            }
         }
     }
 }

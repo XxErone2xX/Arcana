@@ -12,7 +12,7 @@ pub mod config;
 pub mod skills;
 pub mod util;
 
-use arcana_core::{Brain, Understanding};
+use arcana_core::{Brain, Talker, Understanding};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -40,6 +40,8 @@ pub struct Context {
     /// %APPDATA%\Arcana  (메모 등 저장)
     pub data_dir: PathBuf,
     pub events: EventSink,
+    /// Arcana 대화 모델 (명령이 아닌 말에 대답)
+    pub talker: Option<Arc<dyn Talker>>,
 }
 
 impl Context {
@@ -95,7 +97,7 @@ pub trait Skill: Send + Sync {
     fn run(&self, intent: &str, u: &Understanding, cx: &Context) -> Reply;
     /// [`Reply::ask`]로 물어본 뒤 사용자가 "예"를 눌렀을 때
     fn confirmed(&self, _intent: &str, _cx: &Context) -> Reply {
-        Reply::say("확인했어.")
+        Reply::say("확인했습니다.")
     }
 }
 
@@ -111,6 +113,7 @@ pub struct Response {
 /// 두뇌 + 스킬 묶음. 앱은 이것만 쓰면 됨.
 pub struct Assistant {
     brain: Box<dyn Brain>,
+    talker: Option<Arc<dyn Talker>>,
     skills: Vec<Box<dyn Skill>>,
     route: HashMap<String, usize>,
     pub config: Arc<RwLock<Config>>,
@@ -119,10 +122,16 @@ pub struct Assistant {
 }
 
 impl Assistant {
-    pub fn new(brain: Box<dyn Brain>, data_dir: PathBuf, events: EventSink) -> Self {
+    pub fn new(
+        brain: Box<dyn Brain>,
+        talker: Option<Arc<dyn Talker>>,
+        data_dir: PathBuf,
+        events: EventSink,
+    ) -> Self {
         let config = Arc::new(RwLock::new(Config::load_or_create(&data_dir)));
         let mut a = Self {
             brain,
+            talker,
             skills: vec![],
             route: HashMap::new(),
             config,
@@ -149,6 +158,7 @@ impl Assistant {
             config: self.config.clone(),
             data_dir: self.data_dir.clone(),
             events: self.events.clone(),
+            talker: self.talker.clone(),
         }
     }
 
@@ -164,7 +174,7 @@ impl Assistant {
         let cx = self.ctx(text);
         let reply = match self.route.get(intent) {
             Some(&i) => self.skills[i].run(intent, &u, &cx),
-            None => Reply::error(format!("'{intent}' 의도는 아는데 담당 스킬이 없어.")),
+            None => Reply::error(format!("'{intent}' 명령을 처리할 스킬이 아직 없습니다.")),
         };
         Response {
             understanding: u,
@@ -176,12 +186,16 @@ impl Assistant {
     pub fn confirm(&self, intent: &str) -> Reply {
         match self.route.get(intent) {
             Some(&i) => self.skills[i].confirmed(intent, &self.ctx("")),
-            None => Reply::error("확인할 게 없어."),
+            None => Reply::error("확인할 내용이 없습니다."),
         }
     }
 
     pub fn brain_name(&self) -> String {
         self.brain.name()
+    }
+
+    pub fn talker_name(&self) -> Option<String> {
+        self.talker.as_ref().map(|t| t.name())
     }
 
     /// 두뇌는 아는데 스킬이 없는 의도 (개발할 때 확인용)

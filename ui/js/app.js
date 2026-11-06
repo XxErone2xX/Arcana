@@ -10,7 +10,7 @@ const history = [];
 let histPos = 0;
 
 // 첫 화면 추천 명령
-const SUGGESTIONS = ["뭐 할 수 있어?", "라면 3분 타이머", "디코 켜줘", "유튜브에서 로파이 틀어줘"];
+const SUGGESTIONS = ["뭐 할 수 있어?", "라면 3분 타이머", "디코 켜줘", "오늘 너무 피곤해"];
 
 // ───────────── 대화 표시 ─────────────
 function addMsg(who, text, opts = {}) {
@@ -61,9 +61,9 @@ function showReply(reply, r) {
     const box = document.createElement("div");
     box.className = "actions";
     const yes = button("예", "btn primary");
-    const no = button("아니", "btn");
+    const no = button("아니요", "btn");
     yes.onclick = async () => { box.remove(); showReply(await api.confirm(r.understanding.intent)); };
-    no.onclick = () => { box.remove(); addMsg("bot", "알겠어, 안 할게."); };
+    no.onclick = () => { box.remove(); addMsg("bot", "알겠습니다. 취소했습니다."); };
     box.append(yes, no);
     body.appendChild(box);
   }
@@ -86,7 +86,7 @@ async function submit(text) {
     showReply(r.reply, r);
   } catch (e) {
     t.remove();
-    addMsg("bot", "오류: " + e, { error: true });
+    addMsg("bot", "오류가 발생했습니다. " + e, { error: true });
   }
 }
 
@@ -151,7 +151,7 @@ function renderDrawer() {
   $("#caps").replaceChildren(...info.capabilities.map((c) => Object.assign(document.createElement("li"), { textContent: c })));
   $("#opt-debug").checked = info.show_debug;
   $("#opt-update").checked = info.auto_update;
-  const rows = [["버전", "v" + info.version], ["두뇌", info.brain], ["데이터", info.data_dir]];
+  const rows = [["버전", "v" + info.version], ["명령 모델", info.brain], ["대화 모델", info.talker ?? "없음"], ["데이터", info.data_dir]];
   if (info.missing_skills.length) rows.push(["스킬 없음", info.missing_skills.join(", ")]);
   $("#about").replaceChildren(...rows.flatMap(([k, v]) => [
     Object.assign(document.createElement("dt"), { textContent: k }),
@@ -162,7 +162,7 @@ function renderDrawer() {
 $("#opt-debug").onchange = (e) => { info.show_debug = e.target.checked; api.setOption("show_debug", e.target.checked); };
 $("#opt-update").onchange = (e) => { info.auto_update = e.target.checked; api.setOption("auto_update", e.target.checked); };
 $("#btn-config").onclick = () => api.openConfig();
-$("#btn-reload").onclick = async () => { await api.reloadConfig(); info = await api.info(); renderDrawer(); toast("설정 다시 읽었어"); };
+$("#btn-reload").onclick = async () => { await api.reloadConfig(); info = await api.info(); renderDrawer(); toast("설정을 다시 불러왔습니다"); };
 $("#btn-update").onclick = () => checkUpdate(true);
 
 // ───────────── 창 버튼 ─────────────
@@ -178,9 +178,9 @@ async function checkUpdate(manual) {
     if (manual) toast(String(e));
     return;
   }
-  if (!u.available) { if (manual) toast(`최신 버전이야 (v${u.current})`); return; }
+  if (!u.available) { if (manual) toast(`최신 버전입니다 (v${u.current})`); return; }
   if (!manual && !info.auto_update) {
-    addMsg("bot", `새 버전 v${u.latest} 나왔어. 메뉴 → 업데이트 확인을 누르면 받을 수 있어.`);
+    addMsg("bot", `새 버전 v${u.latest}이 나왔습니다. 메뉴 → 업데이트 확인을 누르시면 받을 수 있습니다.`);
     return;
   }
   $("#overlay-text").textContent = `v${u.latest}로 업데이트 중…`;
@@ -189,7 +189,7 @@ async function checkUpdate(manual) {
     await api.applyUpdate(); // 성공하면 앱이 새 버전으로 다시 켜짐
   } catch (e) {
     $("#overlay").hidden = true;
-    addMsg("bot", "업데이트 실패: " + e, { error: true });
+    addMsg("bot", "업데이트하지 못했습니다. " + e, { error: true });
   }
 }
 
@@ -197,7 +197,8 @@ async function checkUpdate(manual) {
 (async () => {
   info = await api.info();
   $("#version").textContent = "v" + info.version;
-  document.title = info.name;
+  document.title = info.app_name;
+  $("#app-name").textContent = info.app_name;
   input.placeholder = `${info.name}에게 명령하기`;
   input.focus();
   checkUpdate(false);

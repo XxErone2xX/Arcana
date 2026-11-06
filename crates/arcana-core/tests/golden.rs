@@ -36,3 +36,33 @@ fn matches_pytorch() {
         }
     }
 }
+
+#[derive(Deserialize)]
+struct ChatCase {
+    text: String,
+    greedy: String,
+}
+
+#[test]
+fn chat_matches_pytorch() {
+    let talker = builtin::load_chat().expect("대화 모델 로드");
+    let cases: Vec<ChatCase> =
+        serde_json::from_str(include_str!("../../../models/golden-chat.json")).unwrap();
+    let mut rng = arcana_core::gpt::Rng::new(1);
+    let mut same = 0;
+    for c in &cases {
+        let got = talker.generate(&c.text, 0.0, &mut rng);
+        if got == c.greedy {
+            same += 1;
+        } else {
+            eprintln!("다름: {} → rust '{}' / torch '{}'", c.text, got, c.greedy);
+        }
+    }
+    // 부동소수점 미세 차이로 가끔 1등 글자가 바뀔 수 있어서 거의 다 맞으면 통과
+    assert!(
+        same * 10 >= cases.len() * 9,
+        "{}/{} 일치",
+        same,
+        cases.len()
+    );
+}

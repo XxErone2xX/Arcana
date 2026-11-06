@@ -23,15 +23,15 @@ impl Skill for Volume {
         match intent {
             "volume_up" => {
                 press_key(VK_VOLUME_UP, 5);
-                Reply::say("소리 키웠어.")
+                Reply::say("볼륨을 높였습니다.")
             }
             "volume_down" => {
                 press_key(VK_VOLUME_DOWN, 5);
-                Reply::say("소리 줄였어.")
+                Reply::say("볼륨을 낮췄습니다.")
             }
             _ => {
                 press_key(VK_VOLUME_MUTE, 1);
-                Reply::say("음소거 전환했어.")
+                Reply::say("음소거를 전환했습니다.")
             }
         }
     }
@@ -49,13 +49,13 @@ impl Skill for Screen {
     fn run(&self, intent: &str, _: &Understanding, _: &Context) -> Reply {
         if intent == "screenshot" {
             press_combo(&[VK_LWIN, VK_SNAPSHOT]);
-            Reply::say("캡처했어. (사진 → 스크린샷 폴더)")
+            Reply::say("화면을 캡처했습니다. (사진 → 스크린샷 폴더에 저장됨)")
         } else {
             #[cfg(windows)]
             unsafe {
                 windows_sys::Win32::System::Shutdown::LockWorkStation();
             }
-            Reply::say("화면 잠갔어.")
+            Reply::say("화면을 잠갔습니다.")
         }
     }
 }
@@ -70,12 +70,14 @@ impl Skill for Power {
         "전원 — \"컴퓨터 꺼줘\" (끄기 전에 물어봄)"
     }
     fn run(&self, _: &str, _: &Understanding, _: &Context) -> Reply {
-        Reply::ask("진짜 컴퓨터 끌까?")
+        Reply::ask("컴퓨터를 종료할까요?")
     }
     fn confirmed(&self, _: &str, _: &Context) -> Reply {
         match hidden_command("shutdown").args(["/s", "/t", "10"]).spawn() {
-            Ok(_) => Reply::say("10초 뒤에 꺼져. 취소하려면 cmd에 shutdown /a 입력해."),
-            Err(e) => Reply::error(format!("종료 실패: {e}")),
+            Ok(_) => {
+                Reply::say("10초 뒤에 종료됩니다. 취소하시려면 cmd에 shutdown /a 를 입력하십시오.")
+            }
+            Err(e) => Reply::error(format!("종료하지 못했습니다. ({e})")),
         }
     }
 }

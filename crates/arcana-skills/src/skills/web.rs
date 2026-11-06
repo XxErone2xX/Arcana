@@ -22,17 +22,17 @@ impl Skill for Web {
         let (url, msg) = if intent == "youtube" {
             (
                 format!("https://www.youtube.com/results?search_query={enc}"),
-                format!("유튜브에서 '{q}' 찾았어."),
+                format!("유튜브에서 '{q}' 검색 결과를 열었습니다."),
             )
         } else {
             (
                 format!("https://www.google.com/search?q={enc}"),
-                format!("'{q}' 검색할게."),
+                format!("'{q}' 검색 결과를 열었습니다."),
             )
         };
         match open::that_detached(url) {
             Ok(_) => Reply::say(msg),
-            Err(e) => Reply::error(format!("브라우저 열기 실패: {e}")),
+            Err(e) => Reply::error(format!("브라우저를 열지 못했습니다. ({e})")),
         }
     }
 }

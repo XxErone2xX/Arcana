@@ -39,20 +39,20 @@ impl Skill for Memo {
         match intent {
             "memo_add" => {
                 let Some(t) = u.slots.get("MEMO").filter(|t| !t.is_empty()) else {
-                    return Reply::error("뭘 메모할지 못 알아들었어.");
+                    return Reply::error("어떤 내용을 메모할지 잘 모르겠습니다.");
                 };
                 m.push(Item {
                     text: t.clone(),
                     time: chrono::Local::now().format("%m/%d %H:%M").to_string(),
                 });
                 match save(cx, &m) {
-                    Ok(_) => Reply::say(format!("'{t}' 메모했어.")),
-                    Err(e) => Reply::error(format!("저장 실패: {e}")),
+                    Ok(_) => Reply::say(format!("'{t}' 메모했습니다.")),
+                    Err(e) => Reply::error(format!("저장하지 못했습니다. ({e})")),
                 }
             }
-            "memo_read" if m.is_empty() => Reply::say("메모 하나도 없어."),
+            "memo_read" if m.is_empty() => Reply::say("저장된 메모가 없습니다."),
             "memo_read" => Reply::say(format!(
-                "메모 {}개:\n{}",
+                "메모가 {}개 있습니다.\n{}",
                 m.len(),
                 m.iter()
                     .enumerate()
@@ -60,13 +60,13 @@ impl Skill for Memo {
                     .collect::<Vec<_>>()
                     .join("\n")
             )),
-            _ => Reply::ask(format!("메모 {}개 전부 지울까?", m.len())),
+            _ => Reply::ask(format!("메모 {}개를 전부 지울까요?", m.len())),
         }
     }
     fn confirmed(&self, _: &str, cx: &Context) -> Reply {
         match save(cx, &[]) {
-            Ok(_) => Reply::say("메모 다 지웠어."),
-            Err(e) => Reply::error(format!("실패: {e}")),
+            Ok(_) => Reply::say("메모를 모두 지웠습니다."),
+            Err(e) => Reply::error(format!("지우지 못했습니다. ({e})")),
         }
     }
 }

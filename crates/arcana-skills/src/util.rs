@@ -27,6 +27,36 @@ pub fn similarity(a: &str, b: &str) -> f32 {
     1.0 - prev[b.len()] as f32 / a.len().max(b.len()) as f32
 }
 
+/// 받침에 맞는 조사: eul("크롬") = "을", eul("디스코드") = "를"
+fn has_batchim(w: &str) -> bool {
+    match w.trim().chars().last() {
+        Some(c @ '가'..='힣') => (c as u32 - 0xAC00) % 28 != 0,
+        Some(c) => "lmnr0136789".contains(c.to_ascii_lowercase()),
+        None => false,
+    }
+}
+pub fn eul(w: &str) -> &'static str {
+    if has_batchim(w) {
+        "을"
+    } else {
+        "를"
+    }
+}
+pub fn eun(w: &str) -> &'static str {
+    if has_batchim(w) {
+        "은"
+    } else {
+        "는"
+    }
+}
+pub fn iga(w: &str) -> &'static str {
+    if has_batchim(w) {
+        "이"
+    } else {
+        "가"
+    }
+}
+
 /// 콘솔 창 안 띄우고 명령 실행
 pub fn hidden_command(program: &str) -> std::process::Command {
     #[allow(unused_mut)]

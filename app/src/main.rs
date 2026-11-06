@@ -10,15 +10,17 @@ use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 struct AppState {
-    assistant: Assistant,
+    assistant: Arc<Assistant>,
     update: Mutex<Option<updater::UpdateInfo>>,
 }
 
 #[derive(Serialize)]
 struct Info {
     name: String,
+    app_name: String,
     version: String,
     brain: String,
+    talker: Option<String>,
     capabilities: Vec<&'static str>,
     show_debug: bool,
     auto_update: bool,
@@ -28,9 +30,13 @@ struct Info {
 
 // ───────────────────── UI에서 부르는 명령들 (ui/js/api.js) ─────────────────────
 
+/// 대화 모델이 커지면 대답 만드는 데 시간이 걸려서, 창이 안 멈추게 별도 스레드에서 실행
 #[tauri::command]
-fn send(state: State<AppState>, text: String) -> Response {
-    state.assistant.handle(&text)
+async fn send(state: State<'_, AppState>, text: String) -> Result<Response, String> {
+    let a = state.assistant.clone();
+    tauri::async_runtime::spawn_blocking(move || a.handle(&text))
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -39,13 +45,15 @@ fn confirm(state: State<AppState>, intent: String) -> Reply {
 }
 
 #[tauri::command]
-fn info(state: State<AppState>) -> Info {
+fn info(app: AppHandle, state: State<AppState>) -> Info {
     let a = &state.assistant;
     let c = a.config.read().unwrap();
     Info {
         name: c.name.clone(),
+        app_name: app.package_info().name.clone(),
         version: env!("CARGO_PKG_VERSION").into(),
         brain: a.brain_name(),
+        talker: a.talker_name(),
         capabilities: a.capabilities(),
         show_debug: c.show_debug,
         auto_update: c.auto_update,
@@ -120,6 +128,23 @@ fn data_dir(app: &AppHandle) -> PathBuf {
         })
 }
 
+/// 대화 모델 불러오기:
+/// %APPDATA%\Arcana\models\arcana-chat.* 가 있으면 그걸 (그래픽카드로 학습한 큰 모델 등),
+/// 없으면 exe에 내장된 기본 모델. 둘 다 실패하면 대화 없이 명령만 처리.
+fn load_chat(dir: &std::path::Path) -> Option<arcana_core::ArcanaChat> {
+    let m = dir.join("models");
+    if let (Ok(w), Ok(j)) = (
+        std::fs::read(m.join("arcana-chat.safetensors")),
+        std::fs::read_to_string(m.join("arcana-chat.json")),
+    ) {
+        match arcana_core::ArcanaChat::from_bytes(&w, &j) {
+            Ok(t) => return Some(t),
+            Err(e) => eprintln!("외부 대화 모델 로드 실패, 내장 모델 사용: {e}"),
+        }
+    }
+    arcana_core::builtin::load_chat().ok()
+}
+
 fn main() {
     // 업데이트 직후 재시작이면 이전 프로세스가 완전히 꺼질 때까지 잠깐 대기
     if std::env::args().any(|a| a == updater::RESTART_FLAG) {
@@ -146,7 +171,9 @@ fn main() {
                 let _ = handle.emit("arcana://event", e);
             });
             let brain = arcana_core::builtin::load().map_err(|e| e.to_string())?;
-            let assistant = Assistant::new(Box::new(brain), data_dir(app.handle()), events);
+            let dir = data_dir(app.handle());
+            let talker = load_chat(&dir).map(|t| Arc::new(t) as Arc<dyn arcana_core::Talker>);
+            let assistant = Arc::new(Assistant::new(Box::new(brain), talker, dir, events));
             app.manage(AppState {
                 assistant,
                 update: Mutex::new(None),
@@ -164,5 +191,5 @@ fn main() {
             apply_update
         ])
         .run(tauri::generate_context!())
-        .expect("Arcana 실행 실패");
+        .expect("앱 실행 실패");
 }

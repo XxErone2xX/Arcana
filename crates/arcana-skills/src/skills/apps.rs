@@ -1,6 +1,6 @@
 //! 프로그램 켜기/끄기. 앱 목록은 config.json의 "apps"에서 관리 (재학습 필요 없음).
 
-use crate::util::{hidden_command, normalize, similarity};
+use crate::util::{eul, eun, hidden_command, iga, normalize, similarity};
 use crate::{Context, Reply, Skill};
 use arcana_core::Understanding;
 
@@ -42,21 +42,26 @@ impl Skill for Apps {
     fn run(&self, intent: &str, u: &Understanding, cx: &Context) -> Reply {
         let said = u.slots.get("APP").cloned().unwrap_or_default();
         if said.is_empty() {
-            return Reply::error("어떤 프로그램인지 못 알아들었어.");
+            return Reply::error("어떤 프로그램인지 잘 모르겠습니다.");
         }
         let Some((name, app)) = find(cx, &said) else {
             return Reply::error(format!(
-                "'{said}'은(는) 아직 등록 안 된 프로그램이야. 설정 → 앱 목록에 추가해줘."
+                "'{said}'{}은 아직 등록되지 않은 프로그램입니다. 메뉴 → 설정 파일 열기에서 추가해 주십시오.", eun(&said)
             ));
         };
         if intent == "open_app" {
             match open::that_detached(&app.open) {
-                Ok(_) => Reply::say(format!("{name} 켤게.")),
-                Err(e) => Reply::error(format!("{name} 실행 실패: {e} (설정에서 경로 확인해줘)")),
+                Ok(_) => Reply::say(format!("{name}{} 실행합니다.", eul(&name))),
+                Err(e) => Reply::error(format!(
+                    "{name} 실행에 실패했습니다. 설정 파일에서 경로를 확인해 주십시오. ({e})"
+                )),
             }
         } else {
             if app.close.is_empty() {
-                return Reply::error(format!("{name}는 끄면 위험해서 안 끌게."));
+                return Reply::error(format!(
+                    "{name}{} 끄면 문제가 생길 수 있어서 종료하지 않겠습니다.",
+                    eun(&name)
+                ));
             }
             let mut killed = false;
             for p in &app.close {
@@ -65,9 +70,9 @@ impl Skill for Apps {
                 }
             }
             if killed {
-                Reply::say(format!("{name} 껐어."))
+                Reply::say(format!("{name}{} 종료했습니다.", eul(&name)))
             } else {
-                Reply::say(format!("{name} 안 켜져 있는 것 같아."))
+                Reply::say(format!("{name}{} 실행 중이 아닌 것 같습니다.", iga(&name)))
             }
         }
     }

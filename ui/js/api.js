@@ -34,13 +34,13 @@ function mock() {
       return {
         understanding: { intent: "preview", confidence: 0.96, slots: {} },
         fallback: false,
-        reply: { text: `(미리보기) "${text}"`, confirm: ask ? "진짜 할까?" : null, quit: false, error: false },
+        reply: { text: `(미리보기) "${text}"`, confirm: ask ? "진행할까요?" : null, quit: false, error: false },
       };
     },
-    async confirm() { return { text: "(미리보기) 확인함", error: false }; },
+    async confirm() { return { text: "(미리보기) 확인했습니다.", error: false }; },
     async info() {
       return {
-        name: "Arcana", version: "preview", brain: "mock", show_debug: true, auto_update: true,
+        name: "Arcana", app_name: "Arcana", version: "preview", brain: "mock", talker: "mock", show_debug: true, auto_update: true,
         data_dir: "-", missing_skills: [],
         capabilities: ["프로그램 켜기/끄기 — \"디코 켜줘\"", "타이머 — \"라면 3분 타이머\""],
       };

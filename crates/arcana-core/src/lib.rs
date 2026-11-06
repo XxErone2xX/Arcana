@@ -1,4 +1,8 @@
-//! # arcana-core — Arcana의 두뇌
+//! # arcana-core — Arcana 모델 (두뇌)
+//!
+//! Arcana = 처음부터 직접 만든 모델 이름. 두 부분으로 되어 있음:
+//! - [`ArcanaNlu`]  명령 이해 (어떤 명령인지 + 앱 이름/시간 등 뽑기)
+//! - [`ArcanaChat`] 대화 (대답을 글자 하나씩 직접 만들어냄)
 //!
 //! 문장 하나를 받아서 "무슨 뜻인지"를 돌려준다.
 //! ```text
@@ -8,6 +12,7 @@
 //! 나중에 두뇌를 바꾸고 싶으면 (더 큰 모델, 생성형 모델 등) [`Brain`] 트레이트만 구현하면
 //! 앱이나 스킬 쪽 코드는 안 건드려도 된다.
 
+pub mod gpt;
 pub mod model;
 pub mod safetensors;
 pub mod tensor;
@@ -39,7 +44,7 @@ pub struct Understanding {
     pub slots: BTreeMap<String, String>,
 }
 
-/// 두뇌 인터페이스. 지금은 [`NluBrain`] 하나지만 나중에 다른 두뇌를 끼울 수 있음.
+/// 두뇌 인터페이스. 지금은 [`ArcanaNlu`] 하나지만 나중에 다른 두뇌를 끼울 수 있음.
 pub trait Brain: Send + Sync {
     fn understand(&self, text: &str) -> Understanding;
     /// 이 두뇌가 아는 의도 목록
@@ -58,8 +63,8 @@ struct Meta {
     tags: Vec<String>,
 }
 
-/// 처음부터 학습시킨 의도+슬롯 모델 (JointBERT 방식)
-pub struct NluBrain {
+/// Arcana 명령 이해 모델 — 처음부터 학습시킨 의도+슬롯 모델 (JointBERT 구조 참고)
+pub struct ArcanaNlu {
     encoder: model::Encoder,
     vocab: std::collections::HashMap<char, usize>,
     intents: Vec<String>,
@@ -69,7 +74,7 @@ pub struct NluBrain {
 
 pub const SUPPORTED_FORMAT: u32 = 1;
 
-impl NluBrain {
+impl ArcanaNlu {
     /// `weights` = arcana-nlu.safetensors 내용, `meta_json` = arcana-nlu.json 내용
     pub fn from_bytes(weights: &[u8], meta_json: &str) -> Result<Self, Error> {
         let meta: Meta =
@@ -138,7 +143,7 @@ fn lower(s: &str) -> String {
         .collect()
 }
 
-impl Brain for NluBrain {
+impl Brain for ArcanaNlu {
     fn understand(&self, text: &str) -> Understanding {
         let (ids, chars) = self.encode(text);
         let out = self.encoder.forward(&ids);
@@ -181,18 +186,135 @@ impl Brain for NluBrain {
 
     fn name(&self) -> String {
         format!(
-            "Arcana NLU ({}, {}층 {}차원)",
-            self.arch, self.encoder.cfg.n_layers, self.encoder.cfg.d_model
+            "Arcana 명령 이해 v1 · {}층 {}차원 ({})",
+            self.encoder.cfg.n_layers, self.encoder.cfg.d_model, self.arch
         )
     }
 }
 
-/// 앱에 내장된 기본 모델
+// ───────────────────────── 대화 (생성형) ─────────────────────────
+
+/// 대화 인터페이스. 지금은 [`ArcanaChat`] 하나지만, 나중에 더 큰 모델로 바꿔 끼울 수 있음.
+pub trait Talker: Send + Sync {
+    fn reply(&self, text: &str) -> String;
+    fn name(&self) -> String;
+}
+
+#[derive(Deserialize)]
+struct ChatMeta {
+    format_version: u32,
+    architecture: String,
+    config: gpt::GptConfig,
+    layer_norm_eps: f32,
+    vocab: Vec<String>,
+}
+
+/// Arcana 대화 모델 — 처음부터 학습시킨 글자 단위 생성 모델 (GPT 계열 디코더 구조 참고)
+pub struct ArcanaChat {
+    gpt: gpt::Gpt,
+    vocab: std::collections::HashMap<char, usize>,
+    itos: Vec<String>,
+    pub temperature: f32,
+    pub top_k: usize,
+    rng: std::sync::Mutex<gpt::Rng>,
+}
+
+impl ArcanaChat {
+    const UNK: usize = 1;
+    const USER: usize = 2;
+    const BOT: usize = 3;
+    const EOS: usize = 4;
+    const N_SPECIAL: usize = 5;
+
+    pub fn from_bytes(weights: &[u8], meta_json: &str) -> Result<Self, Error> {
+        let meta: ChatMeta =
+            serde_json::from_str(meta_json).map_err(|e| Error::Model(format!("json: {e}")))?;
+        if meta.format_version > SUPPORTED_FORMAT || meta.architecture != "arcana-chat-v1" {
+            return Err(Error::Model(format!(
+                "모르는 대화 모델 형식: {} v{}",
+                meta.architecture, meta.format_version
+            )));
+        }
+        let gpt = gpt::Gpt::load(
+            meta.config,
+            &safetensors::Tensors::parse(weights)?,
+            meta.layer_norm_eps,
+        )?;
+        let mut vocab = std::collections::HashMap::new();
+        for (i, t) in meta.vocab.iter().enumerate().skip(Self::N_SPECIAL) {
+            if let Some(c) = t.chars().next() {
+                vocab.insert(c, i);
+            }
+        }
+        Ok(Self {
+            gpt,
+            vocab,
+            itos: meta.vocab,
+            temperature: 0.7,
+            top_k: 8,
+            rng: std::sync::Mutex::new(gpt::Rng::seeded_by_time()),
+        })
+    }
+
+    /// temperature 0 = 항상 같은 대답 (테스트용)
+    pub fn generate(&self, text: &str, temperature: f32, rng: &mut gpt::Rng) -> String {
+        let max_len = self.gpt.cfg.max_len;
+        let mut prompt = vec![Self::USER];
+        prompt.extend(
+            lower(text)
+                .chars()
+                .take(max_len / 2)
+                .map(|c| *self.vocab.get(&c).unwrap_or(&Self::UNK)),
+        );
+        prompt.push(Self::BOT);
+
+        let mut cache = self.gpt.new_cache();
+        let mut logits = Vec::new();
+        for &t in &prompt {
+            logits = self.gpt.step(t, &mut cache);
+        }
+        let mut out = String::new();
+        for _ in 0..80 {
+            if cache.len >= max_len {
+                break;
+            }
+            let next = gpt::sample(&logits, temperature, self.top_k, rng);
+            if next == Self::EOS {
+                break;
+            }
+            if next >= Self::N_SPECIAL {
+                out.push_str(&self.itos[next]);
+            }
+            logits = self.gpt.step(next, &mut cache);
+        }
+        out
+    }
+}
+
+impl Talker for ArcanaChat {
+    fn reply(&self, text: &str) -> String {
+        let mut rng = self.rng.lock().unwrap();
+        self.generate(text, self.temperature, &mut rng)
+    }
+
+    fn name(&self) -> String {
+        let c = &self.gpt.cfg;
+        format!("Arcana 대화 v1 · {}층 {}차원", c.n_layers, c.d_model)
+    }
+}
+
+/// 앱에 내장된 기본 모델들
 pub mod builtin {
     pub const WEIGHTS: &[u8] = include_bytes!("../../../models/arcana-nlu.safetensors");
     pub const META: &str = include_str!("../../../models/arcana-nlu.json");
+    pub const CHAT_WEIGHTS: &[u8] = include_bytes!("../../../models/arcana-chat.safetensors");
+    pub const CHAT_META: &str = include_str!("../../../models/arcana-chat.json");
 
-    pub fn load() -> Result<super::NluBrain, super::Error> {
-        super::NluBrain::from_bytes(WEIGHTS, META)
+    pub fn load() -> Result<super::ArcanaNlu, super::Error> {
+        super::ArcanaNlu::from_bytes(WEIGHTS, META)
+    }
+
+    pub fn load_chat() -> Result<super::ArcanaChat, super::Error> {
+        super::ArcanaChat::from_bytes(CHAT_WEIGHTS, CHAT_META)
     }
 }
