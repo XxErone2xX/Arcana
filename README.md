@@ -105,7 +105,7 @@ cd training && python train.py                    # 재학습 (끝나면 models/
 ### 릴리스 (자동 업데이트 배포)
 1. `Cargo.toml` 의 `version` 올리기 (예: `0.2.0`)
 2. `docs/releases/v0.2.0.md` 작성
-3. `git tag v0.2.0 && git push origin v0.2.0`
+3. 커밋·푸시 후 GitHub → **Actions → Release → Run workflow** (또는 `git tag v0.2.0 && git push origin v0.2.0`)
 
 → GitHub Actions가 윈도우에서 빌드해서 릴리스에 `Arcana.exe` 올림 → 모든 사용자 Arcana가 다음 실행 때 자동 업데이트.
 

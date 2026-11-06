@@ -1,14 +1,17 @@
-# 태그(v0.2.0 등)를 올리면 릴리스 자동 생성 → 사용자들 Arcana가 켤 때 자동 업데이트됨
+# 릴리스 만들기 → 사용자들 Arcana가 켤 때 자동 업데이트됨
 #
 # 릴리스하는 법:
 #   1. Cargo.toml 의 [workspace.package] version 올리기 (예: 0.2.0)
 #   2. docs/releases/v0.2.0.md 에 업데이트 내용 쓰기
-#   3. git tag v0.2.0 && git push origin v0.2.0
+#   3. 커밋 & 푸시 후, 둘 중 하나:
+#      - GitHub → Actions → Release → "Run workflow" 버튼   (태그 자동 생성)
+#      - git tag v0.2.0 && git push origin v0.2.0
 name: Release
 
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -21,13 +24,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      - name: 태그랑 Cargo.toml 버전이 같은지 확인
+      - name: 버전 확인
+        id: ver
         shell: bash
         run: |
-          V=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
-          if [ "v$V" != "${GITHUB_REF_NAME}" ]; then
-            echo "::error::Cargo.toml 버전(v$V)과 태그(${GITHUB_REF_NAME})가 달라"; exit 1
+          V="v$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ] && [ "$V" != "${GITHUB_REF_NAME}" ]; then
+            echo "::error::Cargo.toml 버전($V)과 태그(${GITHUB_REF_NAME})가 달라"; exit 1
           fi
+          echo "tag=$V" >> "$GITHUB_OUTPUT"
 
       - run: cargo test -p arcana-core -p arcana-skills --release
       - run: cargo build -p arcana --release
@@ -36,8 +41,12 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.ver.outputs.tag }}
         run: |
-          NOTES="docs/releases/${GITHUB_REF_NAME}.md"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::error::$TAG 릴리스가 이미 있어. Cargo.toml 버전을 올려줘."; exit 1
+          fi
+          NOTES="docs/releases/$TAG.md"
           if [ -f "$NOTES" ]; then ARGS=(--notes-file "$NOTES"); else ARGS=(--generate-notes); fi
-          gh release create "${GITHUB_REF_NAME}" target/release/Arcana.exe \
-            --title "Arcana ${GITHUB_REF_NAME}" "${ARGS[@]}"
+          gh release create "$TAG" target/release/Arcana.exe \
+            --target "$GITHUB_SHA" --title "Arcana $TAG" "${ARGS[@]}"
