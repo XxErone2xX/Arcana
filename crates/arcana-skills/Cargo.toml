@@ -13,7 +13,8 @@ chrono = "0.4"
 regex = "1"
 open = "5"
 urlencoding = "2"
-ureq = { version = "2", features = ["json"] }
+ureq = { version = "2", features = ["json", "native-tls"] }
+native-tls = "0.2"
 scraper = "0.20"
 url = "2"
 

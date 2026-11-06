@@ -18,6 +18,10 @@ jobs:
       - name: 테스트 (Rust 엔진 = PyTorch 결과 검사 포함)
         run: cargo test -p arcana-core -p arcana-skills --release
 
+      - name: 실제 인터넷 연결 확인 (위키백과·검색·웹페이지)
+        continue-on-error: true
+        run: cargo run -p arcana-skills --example net_check --release
+
       - name: Arcana.exe 빌드
         run: cargo build -p arcana --release
 

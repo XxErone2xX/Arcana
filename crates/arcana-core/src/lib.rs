@@ -209,6 +209,19 @@ pub trait Talker: Send + Sync {
     fn candidates(&self, text: &str, n: usize) -> Vec<String> {
         (0..n).map(|_| self.reply(text)).collect()
     }
+    /// 대답 후보 + 각 후보의 자연스러움(0~1). temperature가 높을수록, top_k가 클수록 다양해짐
+    fn candidates_scored(
+        &self,
+        text: &str,
+        n: usize,
+        _temperature: f32,
+        _top_k: usize,
+    ) -> Vec<(String, f32)> {
+        self.candidates(text, n)
+            .into_iter()
+            .map(|c| (c, 1.0))
+            .collect()
+    }
     fn name(&self) -> String;
 }
 
@@ -350,6 +363,16 @@ impl ArcanaChat {
         temperature: f32,
         rng: &mut gpt::Rng,
     ) -> (String, f32) {
+        self.generate_with(text, temperature, self.top_k, rng)
+    }
+
+    pub fn generate_with(
+        &self,
+        text: &str,
+        temperature: f32,
+        top_k: usize,
+        rng: &mut gpt::Rng,
+    ) -> (String, f32) {
         let max_len = self.gpt.cfg.max_len;
         let mut prompt = vec![Self::USER];
         prompt.extend(
@@ -371,7 +394,7 @@ impl ArcanaChat {
             if cache.len >= max_len {
                 break;
             }
-            let next = gpt::sample(&logits, temperature, self.top_k, rng);
+            let next = gpt::sample(&logits, temperature, top_k, rng);
             let mut p = logits.clone();
             tensor::softmax_inplace(&mut p);
             conf_sum += p[next];
@@ -405,6 +428,24 @@ impl Talker for ArcanaChat {
 
     fn familiarity(&self, text: &str) -> f32 {
         ArcanaChat::familiarity(self, text)
+    }
+
+    fn candidates_scored(
+        &self,
+        text: &str,
+        n: usize,
+        temperature: f32,
+        top_k: usize,
+    ) -> Vec<(String, f32)> {
+        let mut rng = self.rng.lock().unwrap();
+        let mut out: Vec<(String, f32)> = Vec::new();
+        for _ in 0..n {
+            let (r, c) = self.generate_with(text, temperature, top_k, &mut rng);
+            if !out.iter().any(|(x, _)| *x == r) {
+                out.push((r, c));
+            }
+        }
+        out
     }
 
     fn candidates(&self, text: &str, n: usize) -> Vec<String> {

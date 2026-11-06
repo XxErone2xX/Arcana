@@ -6,8 +6,6 @@ use crate::{Context, Reply, Skill};
 
 /// 대화 모델 자신감이 이보다 낮으면 "처음 보는 말"
 const UNFAMILIAR: f32 = 0.5;
-/// 대답 후보 개수 (많을수록 피드백 반영이 잘 되지만 느려짐)
-const CANDIDATES: usize = 4;
 use arcana_core::Understanding;
 
 pub struct Chat;
@@ -79,11 +77,15 @@ impl Skill for Chat {
                             "그 말은 아직 배우지 못했습니다. 학습 탭에 질문을 남겨 두었으니 알려 주시면 기억하겠습니다.",
                         ]));
                     }
-                    // 후보를 여러 개 만들고, 지금까지 받은 👍/👎로 점수 매겨서 제일 좋은 걸 고름
-                    let cands = t.candidates(&cx.text, CANDIDATES);
+                    // 생각하기: 후보를 여러 개 만들고 (피드백·자연스러움·다양성·길이) 점수로 제일 좋은 걸 고름
+                    let (depth, temp, top_k, long) = {
+                        let c = cx.cfg();
+                        (c.think_depth.clamp(1, 32), c.chat_temperature.clamp(0.1, 2.0), c.chat_top_k.clamp(1, 64), c.prefer_long_replies)
+                    };
+                    let cands = t.candidates_scored(&cx.text, depth, temp, top_k);
                     let best = match &cx.knowledge {
-                        Some(k) => k.pick_best(&cx.text, cands),
-                        None => cands.into_iter().find(|c| !c.trim().is_empty()),
+                        Some(k) => k.choose(&cx.text, cands, long),
+                        None => cands.into_iter().map(|(c, _)| c).find(|c| !c.trim().is_empty()),
                     };
                     if let Some(r) = best {
                         return Reply::chat(r.trim());

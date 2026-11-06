@@ -11,6 +11,7 @@
 pub mod config;
 pub mod crawler;
 pub mod knowledge;
+pub mod net;
 pub mod skills;
 pub mod util;
 
@@ -307,6 +308,10 @@ impl Assistant {
                         lines.push(format!("최근에 배운 것: {}", s.recent.join(", ")));
                     }
                 }
+                "diag" | "진단" => {
+                    lines.push("인터넷 연결을 확인하는 중입니다…".into());
+                    lines.extend(net::diagnose());
+                }
                 "skip" | "넘기기" => {
                     if k.current_question().is_some() {
                         k.pop_question();
@@ -335,6 +340,7 @@ impl Assistant {
                     lines.push("/Stop   학습 멈추기".into());
                     lines.push("/Status 지금까지 배운 것".into());
                     lines.push("/Skip   지금 질문 넘기기".into());
+                    lines.push("/Diag   인터넷 연결 진단".into());
                     lines.push("/Teach 말 = 대답   대답 직접 가르치기".into());
                     lines
                         .push("그 외에 입력하시는 말은 제 질문에 대한 대답으로 받겠습니다.".into());

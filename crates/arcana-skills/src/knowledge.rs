@@ -15,6 +15,7 @@
 //! 위키백과 내용은 CC BY-SA 라이선스라서 대답할 때 항상 출처를 같이 보여줌.
 
 use crate::crawler::{self, Robots};
+use crate::net;
 use crate::{Config, Event, EventSink};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -24,11 +25,6 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use url::Url;
 
-const USER_AGENT: &str = concat!(
-    "ArcanaAssistant/",
-    env!("CARGO_PKG_VERSION"),
-    " (https://github.com/XxErone2xX/Arcana)"
-);
 const FRONTIER_MAX: usize = 5000;
 const QUESTIONS_MAX: usize = 50;
 const DAILY_LIMIT: usize = 50_000;
@@ -263,8 +259,9 @@ pub struct Knowledge {
     questions: Mutex<VecDeque<Question>>,
     taught: RwLock<HashMap<String, String>>,
     feedback: RwLock<Vec<Feedback>>,
+    /// 최근에 한 대답들 (같은 대답 반복 안 하게)
+    recent: Mutex<VecDeque<String>>,
     today: Mutex<(String, usize)>,
-    agent: ureq::Agent,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -372,11 +369,6 @@ impl Knowledge {
             .lines()
             .filter_map(|l| serde_json::from_str(l).ok())
             .collect();
-        let agent = ureq::AgentBuilder::new()
-            .timeout_connect(Duration::from_secs(5))
-            .timeout_read(Duration::from_secs(15))
-            .user_agent(USER_AGENT)
-            .build();
         // v0.5: 다른 언어 위키·웹 시작점 한 번 추가
         if !dir.join("seeded_world").exists() {
             for s in SEEDS_WORLD {
@@ -398,8 +390,8 @@ impl Knowledge {
             questions: Mutex::new(questions),
             taught: RwLock::new(taught),
             feedback: RwLock::new(feedback),
+            recent: Mutex::new(VecDeque::new()),
             today: Mutex::new((String::new(), 0)),
-            agent,
         })
     }
 
@@ -468,13 +460,13 @@ impl Knowledge {
     // ───────────── 위키백과 (여러 언어) ─────────────
 
     fn get_json(&self, url: &str) -> Result<serde_json::Value, String> {
-        match self.agent.get(url).call() {
+        match net::get(url, &[("Accept", "application/json")]) {
             Ok(r) => r.into_json().map_err(|e| e.to_string()),
             Err(ureq::Error::Status(404, _)) => Ok(serde_json::Value::Null),
-            Err(ureq::Error::Status(code, _)) => {
-                Err(format!("위키백과 응답 오류입니다. (코드 {code})"))
-            }
-            Err(_) => Err("인터넷에 연결할 수 없습니다. 연결을 확인해 주십시오.".into()),
+            Err(e) => Err(format!(
+                "{}. (/Diag 로 연결 상태를 확인할 수 있습니다)",
+                net::describe(&e)
+            )),
         }
     }
 
@@ -677,14 +669,14 @@ impl Knowledge {
         let Ok(url) = u.join("/robots.txt") else {
             return Robots::deny_all();
         };
-        let r = match self.agent.get(url.as_str()).call() {
+        let r = match net::get(url.as_str(), &[]) {
             Ok(resp) => {
                 let mut txt = String::new();
                 let _ = std::io::Read::read_to_string(
                     &mut std::io::Read::take(resp.into_reader(), 512 * 1024),
                     &mut txt,
                 );
-                Robots::parse(&txt, USER_AGENT)
+                Robots::parse(&txt, net::USER_AGENT)
             }
             Err(ureq::Error::Status(401 | 403, _)) => Robots::deny_all(),
             Err(ureq::Error::Status(_, _)) => Robots::allow_all(), // 404 등: 규칙 없음
@@ -746,10 +738,10 @@ impl Knowledge {
             .entry(host.clone())
             .or_insert(0) += 1;
 
-        let resp = match self.agent.get(u.as_str()).call() {
+        let resp = match net::get(u.as_str(), &[]) {
             Ok(r) => r,
             Err(ureq::Error::Status(_, _)) => return Ok(Step::Skip),
-            Err(_) => return Err("인터넷에 연결할 수 없습니다. 연결을 확인해 주십시오.".into()),
+            Err(e) => return Err(net::describe(&e)),
         };
         if !resp.content_type().contains("html") {
             return Ok(Step::Skip);
@@ -827,12 +819,9 @@ impl Knowledge {
         if !crawler::url_ok(&u, blocked) {
             return Err("안전하지 않거나 차단된 주소라서 열지 않겠습니다.".into());
         }
-        let resp = match self.agent.get(u.as_str()).call() {
+        let resp = match net::get(u.as_str(), &[]) {
             Ok(r) => r,
-            Err(ureq::Error::Status(code, _)) => {
-                return Err(format!("페이지를 열 수 없습니다. (응답 코드 {code})"))
-            }
-            Err(_) => return Err("인터넷에 연결할 수 없거나 사이트가 응답하지 않습니다.".into()),
+            Err(e) => return Err(format!("페이지를 열 수 없습니다. {}", net::describe(&e))),
         };
         if !resp.content_type().contains("html") {
             return Err(format!(
@@ -891,15 +880,16 @@ impl Knowledge {
                 "https://api.search.brave.com/res/v1/web/search?count=5&q={}",
                 urlencoding::encode(q)
             );
-            let v: serde_json::Value = self
-                .agent
-                .get(&url)
-                .set("Accept", "application/json")
-                .set("X-Subscription-Token", brave_key.trim())
-                .call()
-                .map_err(|e| format!("Brave 검색 실패: {e}"))?
-                .into_json()
-                .map_err(|e| e.to_string())?;
+            let v: serde_json::Value = net::get(
+                &url,
+                &[
+                    ("Accept", "application/json"),
+                    ("X-Subscription-Token", brave_key.trim()),
+                ],
+            )
+            .map_err(|e| format!("Brave 검색 실패: {}", net::describe(&e)))?
+            .into_json()
+            .map_err(|e| e.to_string())?;
             for r in v["web"]["results"].as_array().into_iter().flatten().take(5) {
                 hits.push(SearchHit {
                     title: strip_tags(r["title"].as_str().unwrap_or("")),
@@ -1123,6 +1113,51 @@ impl Knowledge {
             }
         }
         score
+    }
+
+    /// 생각하기: 후보들을 여러 기준으로 점수 매겨서 제일 좋은 것 (best-of-N)
+    ///   피드백 보상 + 자연스러움 + 길이(조금) − 최근 대답과 비슷함
+    pub fn choose(
+        &self,
+        user: &str,
+        candidates: Vec<(String, f32)>,
+        prefer_long: bool,
+    ) -> Option<String> {
+        let recent: Vec<String> = self
+            .recent
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|r| phrase_key(r))
+            .collect();
+        let mut best: Option<(f32, String)> = None;
+        for (c, fluency) in candidates
+            .into_iter()
+            .filter(|(c, _)| c.trim().chars().count() >= 2)
+        {
+            let key = phrase_key(&c);
+            let repeat = recent
+                .iter()
+                .map(|r| bigram_sim(&key, r))
+                .fold(0.0f32, f32::max);
+            let len = c.chars().count() as f32;
+            let score = self.reward(user, &c) + 1.5 * fluency - 1.2 * repeat
+                + if prefer_long {
+                    0.25 * (len / 40.0).min(2.0)
+                } else {
+                    0.0
+                };
+            if best.as_ref().map_or(true, |(b, _)| score > *b) {
+                best = Some((score, c));
+            }
+        }
+        let pick = best.map(|(_, c)| c)?;
+        let mut r = self.recent.lock().unwrap();
+        r.push_back(pick.clone());
+        while r.len() > 12 {
+            r.pop_front();
+        }
+        Some(pick)
     }
 
     /// 후보 대답들 중 보상이 제일 높은 것 (best-of-N)

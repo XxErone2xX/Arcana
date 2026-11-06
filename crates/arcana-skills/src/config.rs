@@ -31,6 +31,14 @@ pub struct Config {
     pub site_delay_secs: u64,
     /// 하루에 한 사이트에서 읽을 최대 페이지 수
     pub site_daily_limit: usize,
+    /// 생각 깊이: 대답 후보를 몇 개 만들어서 고를지 (클수록 좋은 대답, 대신 느려짐. 1~32)
+    pub think_depth: usize,
+    /// 대답 다양성 (0.5 = 늘 비슷, 1.2 = 아주 다양하지만 가끔 이상함)
+    pub chat_temperature: f32,
+    /// 한 글자를 고를 때 후보 글자 수 (클수록 다양)
+    pub chat_top_k: usize,
+    /// 비슷하면 긴 대답을 우대
+    pub prefer_long_replies: bool,
     /// (선택) Brave Search API 키 — 넣으면 채팅 검색이 일반 웹 전체에서 됨. 없으면 위키백과 + DuckDuckGo 요약
     pub brave_api_key: String,
     pub apps: BTreeMap<String, AppEntry>,
@@ -154,6 +162,10 @@ impl Default for Config {
             site_delay_secs: 0,
             site_daily_limit: 100,
             brave_api_key: String::new(),
+            think_depth: 8,
+            chat_temperature: 0.9,
+            chat_top_k: 16,
+            prefer_long_replies: true,
             apps,
         }
     }
