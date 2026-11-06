@@ -113,6 +113,30 @@ def has_batchim(word):
     return ch.lower() in "lmnr"  # 영어는 대충
 
 
+# 지식 질문 주제 ("블랙홀이 뭐야" 의 블랙홀)
+TOPICS = [
+    "블랙홀", "세종대왕", "광합성", "인공지능", "비트코인", "이순신", "아인슈타인", "상대성 이론", "대한민국",
+    "일본", "미국", "태양계", "화성", "공룡", "피라미드", "양자역학", "DNA", "민주주의", "조선", "고려",
+    "임진왜란", "지구 온난화", "빅뱅", "원자", "전기", "자석", "화산", "지진", "태풍", "무지개", "은하수",
+    "달", "태양", "목성", "토성", "바이러스", "세균", "백신", "뉴턴", "에디슨", "레오나르도 다빈치",
+    "모나리자", "에펠탑", "만리장성", "올림픽", "월드컵", "축구", "야구", "체스", "바둑", "피아노",
+    "트랜스포머", "신경망", "머신러닝", "리눅스", "윈도우", "자바스크립트", "러스트", "루아", "HTML",
+    "GPU", "CPU", "반도체", "인터넷", "와이파이", "블루투스", "유튜브", "로블록스", "마인크래프트",
+    "광복절", "한글", "훈민정음", "김치", "비빔밥", "추석", "설날", "서울", "부산", "제주도", "독도",
+    "고양이", "강아지", "펭귄", "고래", "상어", "코끼리", "기린", "판다", "개미", "벌",
+    "산소", "이산화탄소", "물", "중력", "빛", "소리", "온도", "에너지", "전자", "양성자",
+]
+
+
+def rand_topic():
+    r = random.random()
+    if r < 0.6:
+        return random.choice(TOPICS)
+    if r < 0.85:
+        return random.choice(NOUNS)
+    return rand_word()
+
+
 def obj(word):      # 을/를
     return "을" if has_batchim(word) else "를"
 
@@ -233,6 +257,17 @@ INTENTS = {
         "기능 알려줘", "뭐 할 줄 알아", "넌 뭘 할 수 있니", "뭘 할 수 있어", "어떤 기능 있어", "너 할 줄 아는 거 뭐야", "자기소개 해봐", "명령어 목록",
     ],
 
+    # 지식 질문 → 지식 저장소/위키백과에서 찾아봄
+    "ask_knowledge": [
+        "{TOPIC}{IGA} 뭐야", "{TOPIC}{EUN} 뭐야", "{TOPIC} 뭐야", "{TOPIC}{IGA} 뭔데", "{TOPIC}{IGA} 뭐지",
+        "{TOPIC}{EUN} 누구야", "{TOPIC} 누구야", "{TOPIC}{IGA} 누구지", "{TOPIC}에 대해 알려줘",
+        "{TOPIC}에 대해 설명해줘", "{TOPIC} 설명해줘", "{TOPIC}{IGA} 뭔지 알려줘", "{TOPIC}{IGA} 무슨 뜻이야",
+        "{TOPIC} 뜻", "{TOPIC} 뜻이 뭐야", "{TOPIC}에 대해 아는 거 있어?", "{TOPIC} 알아?",
+        "{TOPIC}{EUN} 어떤 사람이야", "{TOPIC}{EUN} 어디야", "{TOPIC}{IGA} 어디야", "{TOPIC}에 대해 공부해줘",
+        "{TOPIC}{IGA} 뭔지 궁금해", "{TOPIC}{EUN} 왜 생겨", "{TOPIC}{EUN} 어떻게 생겼어", "{TOPIC} 정보 알려줘",
+        "{TOPIC}에 대해 찾아봐줘", "{TOPIC}{IGA} 뭐예요", "{TOPIC}{EUN} 무엇인가요",
+    ],
+
     # 모르는 말(학습 안 한 잡담 등) → "잘 모르겠다"고 하게 만드는 클래스
     "unknown": [
         "오늘 너무 피곤하다", "배고프다", "롤 할까", "심심해", "이거 맞아?", "아 몰라", "ㅋㅋㅋㅋ",
@@ -255,7 +290,7 @@ def fill(template):
     for part in re.split(r"(\{[A-Z]+\})", template):
         if not part:
             continue
-        if part in ("{APP}", "{TIME}", "{QUERY}", "{MEMO}", "{NOUN}"):
+        if part in ("{APP}", "{TIME}", "{QUERY}", "{MEMO}", "{NOUN}", "{TOPIC}"):
             slot = part[1:-1]
             if slot == "APP":
                 val = random.choice(APPS) if random.random() < 0.8 else rand_word()
@@ -265,6 +300,8 @@ def fill(template):
                 val = rand_query()
             elif slot == "MEMO":
                 val = rand_memo()
+            elif slot == "TOPIC":
+                val = rand_topic()
             else:  # {NOUN}: unknown 문장용, 슬롯 아님
                 val = random.choice(NOUNS)
                 last_value = val
@@ -277,6 +314,11 @@ def fill(template):
                 tags.append(("B-" if i == 0 else "I-") + slot)
         elif part == "{OBJ}":
             j = obj(last_value)
+            text += j
+            tags.append("O")
+        elif part in ("{IGA}", "{EUN}"):
+            j = (("이" if has_batchim(last_value) else "가") if part == "{IGA}"
+                 else ("은" if has_batchim(last_value) else "는"))
             text += j
             tags.append("O")
         elif part == "{RA}":

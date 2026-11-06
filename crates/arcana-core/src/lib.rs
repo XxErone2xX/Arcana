@@ -197,6 +197,10 @@ impl Brain for ArcanaNlu {
 /// 대화 인터페이스. 지금은 [`ArcanaChat`] 하나지만, 나중에 더 큰 모델로 바꿔 끼울 수 있음.
 pub trait Talker: Send + Sync {
     fn reply(&self, text: &str) -> String;
+    /// 대답 + 자신감(0~1). 자신감이 낮으면 '잘 모르는 말'로 보고 사용자에게 물어봄
+    fn reply_scored(&self, text: &str) -> (String, f32) {
+        (self.reply(text), 1.0)
+    }
     fn name(&self) -> String;
 }
 
@@ -207,6 +211,8 @@ struct ChatMeta {
     config: gpt::GptConfig,
     layer_norm_eps: f32,
     vocab: Vec<String>,
+    #[serde(default)]
+    known_inputs: Vec<String>,
 }
 
 /// Arcana 대화 모델 — 처음부터 학습시킨 글자 단위 생성 모델 (GPT 계열 디코더 구조 참고)
@@ -217,6 +223,27 @@ pub struct ArcanaChat {
     pub temperature: f32,
     pub top_k: usize,
     rng: std::sync::Mutex<gpt::Rng>,
+    /// 학습 때 본 입력 문장들 (두 글자씩 묶음)
+    known: Vec<std::collections::HashSet<(char, char)>>,
+}
+
+/// 비교용 정규화: 문장부호·공백 제거, 소문자, ㅋㅋ·ㅠㅠ 같은 자모만 있는 부분 제거
+fn familiar_key(s: &str) -> Vec<char> {
+    let n: Vec<char> = lower(s).chars().filter(|c| c.is_alphanumeric()).collect();
+    let core: Vec<char> = n
+        .iter()
+        .cloned()
+        .filter(|c| !('\u{3131}'..='\u{318E}').contains(c))
+        .collect();
+    if core.is_empty() {
+        n
+    } else {
+        core
+    }
+}
+
+fn bigrams(c: &[char]) -> std::collections::HashSet<(char, char)> {
+    c.windows(2).map(|w| (w[0], w[1])).collect()
 }
 
 impl ArcanaChat {
@@ -253,11 +280,51 @@ impl ArcanaChat {
             temperature: 0.7,
             top_k: 8,
             rng: std::sync::Mutex::new(gpt::Rng::seeded_by_time()),
+            known: meta
+                .known_inputs
+                .iter()
+                .map(|s| bigrams(&familiar_key(s)))
+                .filter(|g| !g.is_empty())
+                .collect(),
         })
+    }
+
+    /// 이 말이 학습한 말들이랑 얼마나 닮았는지 0~1 (0.5 미만이면 처음 보는 말로 봄)
+    pub fn familiarity(&self, text: &str) -> f32 {
+        if self.known.is_empty() {
+            return 1.0; // 목록이 없는 모델이면 판단 안 함
+        }
+        let gx = bigrams(&familiar_key(text));
+        if gx.is_empty() {
+            return 0.0;
+        }
+        let mut best = 0.0f32;
+        for gt in &self.known {
+            let inter = gx.intersection(gt).count() as f32;
+            let rec_t = inter / gt.len() as f32;
+            let rec_x = inter / gx.len() as f32;
+            let s = if rec_t >= 0.99 {
+                0.7 * rec_t + 0.3 * rec_x
+            } else {
+                2.0 * inter / (gx.len() + gt.len()) as f32
+            };
+            best = best.max(s);
+        }
+        best
     }
 
     /// temperature 0 = 항상 같은 대답 (테스트용)
     pub fn generate(&self, text: &str, temperature: f32, rng: &mut gpt::Rng) -> String {
+        self.generate_scored(text, temperature, rng).0
+    }
+
+    /// 대답 + 자신감 (고른 글자들의 평균 확률. 잘 아는 말이면 높고, 처음 보는 말이면 낮음)
+    pub fn generate_scored(
+        &self,
+        text: &str,
+        temperature: f32,
+        rng: &mut gpt::Rng,
+    ) -> (String, f32) {
         let max_len = self.gpt.cfg.max_len;
         let mut prompt = vec![Self::USER];
         prompt.extend(
@@ -274,11 +341,16 @@ impl ArcanaChat {
             logits = self.gpt.step(t, &mut cache);
         }
         let mut out = String::new();
+        let (mut conf_sum, mut n) = (0.0f32, 0usize);
         for _ in 0..80 {
             if cache.len >= max_len {
                 break;
             }
             let next = gpt::sample(&logits, temperature, self.top_k, rng);
+            let mut p = logits.clone();
+            tensor::softmax_inplace(&mut p);
+            conf_sum += p[next];
+            n += 1;
             if next == Self::EOS {
                 break;
             }
@@ -287,14 +359,23 @@ impl ArcanaChat {
             }
             logits = self.gpt.step(next, &mut cache);
         }
-        out
+        (out, if n == 0 { 0.0 } else { conf_sum / n as f32 })
     }
 }
 
 impl Talker for ArcanaChat {
     fn reply(&self, text: &str) -> String {
+        self.reply_scored(text).0
+    }
+
+    /// 자신감 = 입력이 배운 말들이랑 닮은 정도 (모델이 외운 대답을 지어내는 걸 막기 위해)
+    fn reply_scored(&self, text: &str) -> (String, f32) {
+        let fam = self.familiarity(text);
         let mut rng = self.rng.lock().unwrap();
-        self.generate(text, self.temperature, &mut rng)
+        (
+            self.generate_scored(text, self.temperature, &mut rng).0,
+            fam,
+        )
     }
 
     fn name(&self) -> String {

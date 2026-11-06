@@ -3,6 +3,7 @@
 mod apps;
 mod chat;
 mod clock;
+mod knowledge;
 mod memo;
 mod system;
 mod timer;
@@ -20,6 +21,7 @@ pub fn builtin() -> Vec<Box<dyn Skill>> {
         Box::new(system::Screen),
         Box::new(system::Power),
         Box::new(memo::Memo),
+        Box::new(knowledge::Knowledge),
         Box::new(chat::Chat),
     ]
 }

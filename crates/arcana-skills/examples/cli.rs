@@ -33,6 +33,18 @@ fn main() {
         if line.is_empty() {
             continue;
         }
+        // "학습 " 으로 시작하면 학습 탭 입력처럼 처리 (예: "학습 /Start")
+        if let Some(cmd) = line.strip_prefix("학습 ") {
+            let r = a.study(cmd);
+            for l in &r.lines {
+                println!("[학습] {l}");
+            }
+            if let Some(q) = &r.question {
+                println!("[학습 질문] {q}");
+            }
+            println!("[학습 상태] running={} {:?}", r.running, r.stats);
+            continue;
+        }
         let r = a.handle(line);
         println!(
             "   [{} {:.0}% {:?}]",

@@ -17,6 +17,10 @@ pub struct Config {
     pub auto_update: bool,
     /// AI가 어떻게 판단했는지 대화창에 표시
     pub show_debug: bool,
+    /// 스스로 공부 중인지 (학습 탭의 /Start, /Stop). 켜두면 앱 다시 켜도 이어서 공부
+    pub self_study: bool,
+    /// 자율 탐색 간격 (초). 너무 짧으면 위키백과 서버에 부담
+    pub study_interval_secs: u64,
     pub apps: BTreeMap<String, AppEntry>,
 }
 
@@ -130,6 +134,8 @@ impl Default for Config {
             threshold: 0.55,
             auto_update: true,
             show_debug: false,
+            self_study: false,
+            study_interval_secs: 20,
             apps,
         }
     }

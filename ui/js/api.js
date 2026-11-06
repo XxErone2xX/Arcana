@@ -10,6 +10,8 @@ export const api = isApp
   ? {
       send: (text) => invoke("send", { text }),
       confirm: (intent) => invoke("confirm", { intent }),
+      study: (text) => invoke("study", { text }),
+      studyStatus: () => invoke("study_status"),
       info: () => invoke("info"),
       setOption: (key, value) => invoke("set_option", { key, value }),
       openConfig: () => invoke("open_config"),
@@ -38,6 +40,12 @@ function mock() {
       };
     },
     async confirm() { return { text: "(미리보기) 확인했습니다.", error: false }; },
+    async study(text) {
+      const running = /start/i.test(text) ? true : /stop/i.test(text) ? false : window.__running ?? false;
+      window.__running = running;
+      return { lines: text ? [`(미리보기) ${text}`] : [], running, question: "'수성'은(는) 뜻이 여러 개입니다. 어떤 걸 공부할까요? (번호 또는 이름)\n1. 수성 (행성)\n2. 수성 (화학)", stats: { count: 12, queued: 80, taught: 1, questions: 1, recent: ["블랙홀"] } };
+    },
+    async studyStatus() { return this.study(""); },
     async info() {
       return {
         name: "Arcana", app_name: "Arcana", version: "preview", brain: "mock", talker: "mock", show_debug: true, auto_update: true,

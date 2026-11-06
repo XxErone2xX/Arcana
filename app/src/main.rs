@@ -3,7 +3,7 @@
 
 mod updater;
 
-use arcana_skills::{Assistant, Event, Reply, Response};
+use arcana_skills::{Assistant, Event, Reply, Response, StudyResult};
 use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -37,6 +37,20 @@ async fn send(state: State<'_, AppState>, text: String) -> Result<Response, Stri
     tauri::async_runtime::spawn_blocking(move || a.handle(&text))
         .await
         .map_err(|e| e.to_string())
+}
+
+/// 학습 탭 입력 (/Start, /Stop, 질문에 대한 대답 등). 위키백과 접속이 있을 수 있어서 별도 스레드
+#[tauri::command]
+async fn study(state: State<'_, AppState>, text: String) -> Result<StudyResult, String> {
+    let a = state.assistant.clone();
+    tauri::async_runtime::spawn_blocking(move || a.study(&text))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn study_status(state: State<AppState>) -> StudyResult {
+    state.assistant.study_state(vec![])
 }
 
 #[tauri::command]
@@ -174,6 +188,7 @@ fn main() {
             let dir = data_dir(app.handle());
             let talker = load_chat(&dir).map(|t| Arc::new(t) as Arc<dyn arcana_core::Talker>);
             let assistant = Arc::new(Assistant::new(Box::new(brain), talker, dir, events));
+            assistant.start_self_study();
             app.manage(AppState {
                 assistant,
                 update: Mutex::new(None),
@@ -182,6 +197,8 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             send,
+            study,
+            study_status,
             confirm,
             info,
             set_option,

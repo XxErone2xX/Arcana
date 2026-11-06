@@ -26,7 +26,7 @@ def main():
     train, val = data[:split], data[split:]
 
     intents = list(INTENTS.keys())
-    tags = ["O"] + [f"{p}-{s}" for s in ("APP", "TIME", "QUERY", "MEMO") for p in ("B", "I")]
+    tags = ["O"] + [f"{p}-{s}" for s in ("APP", "TIME", "QUERY", "MEMO", "TOPIC") for p in ("B", "I")]
     chars = set()
     for t, _, _ in data:
         chars.update(t.lower())

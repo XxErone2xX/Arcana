@@ -1,7 +1,11 @@
 //! 대화: 명령이 아닌 말은 Arcana 대화 모델이 직접 대답을 만들어냄.
 //! (대화 모델이 없으면 정해진 문장으로 대답)
 
+use crate::knowledge::Question;
 use crate::{Context, Reply, Skill};
+
+/// 대화 모델 자신감이 이보다 낮으면 "처음 보는 말"
+const UNFAMILIAR: f32 = 0.5;
 use arcana_core::Understanding;
 
 pub struct Chat;
@@ -37,7 +41,20 @@ impl Skill for Chat {
             _ => {
                 // 인사, 감사, 잡담 → 대화 모델이 직접 대답
                 if let Some(t) = &cx.talker {
-                    let r = t.reply(&cx.text);
+                    let (r, confidence) = t.reply_scored(&cx.text);
+                    if confidence < UNFAMILIAR {
+                        // 처음 보는 말 → 지어내지 않고, 학습 탭에서 어떻게 대답할지 물어봄
+                        if let Some(k) = &cx.knowledge {
+                            let q = Question::Reply { phrase: cx.text.trim().to_string() };
+                            if k.ask(q.clone()) {
+                                cx.emit(crate::Event::Question { text: q.text() });
+                            }
+                        }
+                        return Reply::say(pick(&[
+                            "죄송합니다. 아직 잘 모르는 말입니다. 학습 탭에서 어떻게 대답하면 좋을지 알려 주시면 배우겠습니다.",
+                            "그 말은 아직 배우지 못했습니다. 학습 탭에 질문을 남겨 두었으니 알려 주시면 기억하겠습니다.",
+                        ]));
+                    }
                     if !r.trim().is_empty() {
                         return Reply::say(r.trim());
                     }

@@ -131,6 +131,18 @@ def main():
               f"%APPDATA%\\Arcana\\models\\ 폴더에 복사하고 앱을 다시 켜면 돼.")
 
 
+def known_inputs():
+    import re
+    import chat_data
+    out = set()
+    for users, _ in chat_data.TOPICS:
+        for u in users:
+            t = re.sub(r"\{[A-Z]+[^}]*\}", " ", u).strip()
+            if len(re.sub(r"\s", "", t)) >= 2:
+                out.add(t)
+    return sorted(out)
+
+
 def export(model, vocab, out, golden):
     write_safetensors(os.path.join(out, "arcana-chat.safetensors"), model.state_dict())
     meta = {
@@ -140,6 +152,8 @@ def export(model, vocab, out, golden):
         "layer_norm_eps": 1e-5,
         "vocab": vocab.itos,
         "special": {"pad": 0, "unk": 1, "user": 2, "bot": 3, "eos": 4},
+        # 앱이 "처음 보는 말인지" 판단할 때 쓰는 학습 문장 목록 (슬롯 자리는 빠짐)
+        "known_inputs": known_inputs(),
     }
     with open(os.path.join(out, "arcana-chat.json"), "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False, indent=1)

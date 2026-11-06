@@ -17,6 +17,11 @@
       <span id="app-name" data-tauri-drag-region>Arcana</span>
       <span class="version" id="version" data-tauri-drag-region></span>
     </div>
+    <nav class="tabs" data-tauri-drag-region>
+      <button class="tab active" data-view="chat">대화</button>
+      <button class="tab" data-view="study">학습<i class="dot" id="study-dot" hidden></i></button>
+    </nav>
+    <div class="spacer" data-tauri-drag-region></div>
     <div class="win-btns">
       <button class="icon-btn" id="btn-min" title="최소화">
         <svg viewBox="0 0 24 24"><path d="M6 12h12"/></svg>
@@ -27,6 +32,7 @@
     </div>
   </header>
 
+  <div class="view" id="view-chat">
   <main id="log" class="log" aria-live="polite">
     <!-- 첫 화면 -->
     <section class="welcome" id="welcome">
@@ -44,6 +50,35 @@
     </form>
     <p class="hint">Enter로 보내기 · ↑ 이전 명령</p>
   </footer>
+  </div>
+
+  <!-- 학습 탭 -->
+  <div class="view" id="view-study" hidden>
+    <div class="study-head">
+      <span class="pill" id="study-state">멈춤</span>
+      <span class="study-stats" id="study-stats"></span>
+    </div>
+    <main class="feed" id="feed">
+      <div class="feed-empty" id="feed-empty">
+        <h1>스스로 학습</h1>
+        <p><b>/Start</b> 를 입력하면 위키백과를 조금씩 읽으며 스스로 공부합니다.<br />모르는 게 생기면 여기서 여쭤봅니다.</p>
+      </div>
+    </main>
+    <section class="question" id="question" hidden>
+      <div class="q-label">Arcana의 질문</div>
+      <div class="q-text" id="q-text"></div>
+      <div class="q-actions"><button class="btn" id="q-skip" type="button">넘기기</button></div>
+    </section>
+    <footer class="bottom">
+      <form class="composer" id="study-form" autocomplete="off">
+        <input id="study-input" placeholder="/Start · /Stop · /Status · /Help 또는 질문에 대답" maxlength="300" />
+        <button type="submit" class="send" id="study-send" title="보내기" disabled>
+          <svg viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></svg>
+        </button>
+      </form>
+      <p class="hint">명령은 / 로 시작 · 그 외에는 질문에 대한 대답</p>
+    </footer>
+  </div>
 
   <!-- 사이드 메뉴 -->
   <aside class="drawer" id="drawer" hidden>
@@ -82,5 +117,6 @@
   <div class="toasts" id="toasts"></div>
 
   <script type="module" src="js/app.js"></script>
+  <script type="module" src="js/study.js"></script>
 </body>
 </html>
