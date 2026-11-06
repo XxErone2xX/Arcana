@@ -5,3 +5,4 @@ training/assistant_model.pt
 app/gen/
 training/chat_model*.pt
 training/out/
+training/data/

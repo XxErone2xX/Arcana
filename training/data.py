@@ -376,6 +376,24 @@ def generate(n_per_intent=1200, seed=0):
         u = chat_data.render(random.choice(users), {k: random.choice(v) for k, v in vals.items()})
         u = random.choice(chat_data.NOISE_PRE) + u + random.choice(chat_data.NOISE_SUF)
         data.append((u, ["O"] * len(u), "unknown"))
+    # 사용자 대화 데이터(training/data/*.jsonl)의 말들도 "명령 아님" 예시로
+    # → "어제 잠 못 잤어?"를 화면 잠금으로, "디코 들어와"를 디스코드 끄기로 착각하지 않게
+    # (진짜 명령처럼 생긴 문장은 제외)
+    import glob, json, os
+    command_words = ("몇 시", "몇시", "검색", "메모", "타이머", "알람", "켜줘", "꺼줘", "열어줘", "실행", "틀어줘", "볼륨",
+                     "소리 키", "소리 줄", "음소거", "스크린샷", "캡처", "캡쳐", "잠가", "잠금", "컴퓨터 꺼", "날짜", "며칠", "요일")
+    here = os.path.dirname(os.path.abspath(__file__))
+    talk = set()
+    for path in glob.glob(os.path.join(here, "data", "*.jsonl")):
+        for line in open(path, encoding="utf-8"):
+            if line.strip():
+                u = json.loads(line)["user"]
+                if not any(w in u for w in command_words):
+                    talk.add(u)
+    for u in sorted(talk):
+        for _ in range(2):
+            v = u if random.random() < 0.7 else u.replace(" ", "")
+            data.append((v, ["O"] * len(v), "unknown"))
     random.shuffle(data)
     return data
 

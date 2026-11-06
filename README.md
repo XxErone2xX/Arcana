@@ -98,7 +98,16 @@ Arcana가 질문하는 경우:
 | Arcana 명령 이해 | 어떤 명령인지 + 앱 이름·시간 등 뽑기 | 인코더 (JointBERT 참고) | 약 85만 |
 | Arcana 대화 | 대답을 글자 하나씩 직접 만들어냄 | 디코더 (GPT 계열 참고) | small 약 200만 (내장) |
 
+대화 모델은 사람끼리 나눈 대화 데이터(`training/data/*.jsonl`)로 학습해. 대화 파일은 `convert_dialogue.py`로 넣으면 돼:
+```bash
+cd training
+python convert_dialogue.py 대화.txt      # "A: …" / "B: …" 형식, 빈 줄로 대화 구분 → data/dialogue.jsonl (대답은 합니다체로)
+python train_chat.py                     # data/ 폴더의 jsonl 전부로 학습
+```
+> `chat_data.py` 템플릿은 Claude가 쓴 문장이라 Anthropic 약관상 대화 모델 학습에 쓰지 않아 (명령 분류 모델에만 사용).
+
 명령이면 명령 이해 모델이 처리하고, 명령이 아닌 말은 대화 모델이 대답해.
+앱 끄기·화면 잠금 같은 실제 동작은 문장에 동작 말("꺼", "잠가" 등)이 있을 때만 실행돼서, 대화를 명령으로 착각해도 엉뚱한 일이 안 일어나.
 
 ### 대화 모델 키우기 (그래픽카드)
 | 크기 | 파라미터 | 비고 |

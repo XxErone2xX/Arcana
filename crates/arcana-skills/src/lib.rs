@@ -143,6 +143,65 @@ pub struct Response {
     pub reply: Reply,
 }
 
+/// 의도별로 문장에 있어야 하는 말 (띄어쓰기 없이 비교). 목록에 없는 의도는 검사 안 함
+fn required_words(intent: &str) -> &'static [&'static [&'static str]] {
+    match intent {
+        "open_app" => &[&[
+            "켜",
+            "열어",
+            "열기",
+            "실행",
+            "띄워",
+            "키자",
+            "들어가",
+            "시작",
+            "켤",
+        ]],
+        "close_app" => &[&["꺼", "끄", "닫", "종료", "끝내", "끌"]],
+        "lock" => &[&["잠가", "잠금", "잠궈", "잠그", "락"]],
+        "shutdown" => &[
+            &["꺼", "끄", "종료", "끌"],
+            &["컴퓨터", "컴", "pc", "전원", "시스템"],
+        ],
+        "volume_up" | "volume_down" => &[&["소리", "볼륨"]],
+        "mute" => &[&["음소거", "뮤트", "소리꺼", "소리끄", "소리없", "조용히"]],
+        "screenshot" => &[&["스크린샷", "캡처", "캡쳐", "스샷", "화면찍", "화면저장"]],
+        "set_timer" => &[
+            &[
+                "타이머",
+                "알람",
+                "알려",
+                "깨워",
+                "불러",
+                "재줘",
+                "카운트",
+                "말해",
+                "지나면",
+            ],
+            &["초", "분", "시간"],
+        ],
+        "memo_add" => &[&["메모", "적어", "기억해", "할일", "추가"]],
+        "memo_read" => &[&["메모", "할일", "적어둔"]],
+        "memo_clear" => &[&["메모", "할일"], &["지워", "삭제", "초기화", "비워"]],
+        "youtube" => &[&["유튜브", "틀어", "재생", "보여줘", "듣고싶", "보고싶"]],
+        "web_search" => &[&["검색", "찾아", "구글", "알아봐", "네이버", "구글링"]],
+        "ask_time" => &[&["시", "시간"]],
+        "ask_date" => &[&["며칠", "몇일", "날짜", "요일", "몇월"]],
+        _ => &[],
+    }
+}
+
+pub fn intent_has_action_words(intent: &str, text: &str) -> bool {
+    let t: String = text
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect::<String>()
+        .to_lowercase();
+    required_words(intent)
+        .iter()
+        .all(|group| group.iter().any(|w| t.contains(w)))
+}
+
 /// 두뇌 + 스킬 묶음. 앱은 이것만 쓰면 됨.
 pub struct Assistant {
     brain: Box<dyn Brain>,
@@ -234,7 +293,10 @@ impl Assistant {
             };
         }
         let threshold = self.config.read().unwrap().threshold;
-        let fallback = u.confidence < threshold;
+        // 안전장치: 실제로 무언가를 실행하는 명령은 문장에 그 동작 말이 있을 때만
+        //   ("어제 잠 못 잤어?" → 화면 잠금 X, "디코 들어와" → 디스코드 끄기 X)
+        let blocked = !intent_has_action_words(&u.intent, text);
+        let fallback = u.confidence < threshold || blocked;
         // 3) 확신이 낮으면(잘 못 알아들음) 학습 탭에서 어떻게 대답할지 물어보기
         if fallback && text.trim().chars().count() >= 2 {
             let q = knowledge::Question::Reply {
@@ -406,5 +468,25 @@ impl Assistant {
             .map(|s| s.describe())
             .filter(|d| !d.is_empty())
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod safety_tests {
+    use super::intent_has_action_words as ok;
+    #[test]
+    fn action_words() {
+        assert!(!ok("lock", "어제 잠 못 잤어?"));
+        assert!(ok("lock", "컴퓨터 잠가줘"));
+        assert!(!ok("close_app", "그럼 끝나면 디코 들어와"));
+        assert!(ok("close_app", "디코 꺼줘"));
+        assert!(!ok("open_app", "너 고양이 키운다며?"));
+        assert!(ok("open_app", "크롬 켜줘"));
+        assert!(!ok("shutdown", "불 꺼줘"));
+        assert!(ok("shutdown", "컴퓨터 꺼줘"));
+        assert!(!ok("set_timer", "너 그거 들었어? 다은이 전학 간대."));
+        assert!(ok("set_timer", "라면 3분 타이머"));
+        assert!(!ok("screenshot", "태현이 찍어줬어."));
+        assert!(ok("greet", "아무 말"));
     }
 }

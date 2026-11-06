@@ -6,9 +6,34 @@ use crate::{Context, Reply, Skill};
 
 /// 대화 모델 자신감이 이보다 낮으면 "처음 보는 말"
 const UNFAMILIAR: f32 = 0.5;
+/// 대답 후보의 자연스러움(고른 글자들의 평균 확률)이 이보다 낮으면 문장이 깨진 것으로 보고 버림
+const MIN_FLUENCY: f32 = 0.85;
 use arcana_core::Understanding;
 
 pub struct Chat;
+
+/// 모르는 말: 지어내지 않고 → 학습 탭에 질문 남기고 → 인터넷에서 찾아봄
+fn unfamiliar(cx: &Context) -> Reply {
+    if let Some(k) = &cx.knowledge {
+        let q = Question::Reply {
+            phrase: cx.text.trim().to_string(),
+        };
+        if k.ask(q.clone()) {
+            cx.emit(crate::Event::Question { text: q.text() });
+        }
+    }
+    if looks_meaningful(&cx.text) {
+        if let Ok(Some(found)) = crate::skills::web::search_text(cx.text.trim(), cx) {
+            return Reply::say(format!(
+                "제가 아직 잘 모르는 말이라 인터넷에서 찾아봤습니다.\n\n{found}\n\n(학습 탭에서 어떻게 대답하면 좋을지 알려 주시면 다음부터 그렇게 대답하겠습니다.)"
+            ));
+        }
+    }
+    Reply::say(pick(&[
+        "죄송합니다. 아직 잘 모르는 말입니다. 학습 탭에서 어떻게 대답하면 좋을지 알려 주시면 배우겠습니다.",
+        "그 말은 아직 배우지 못했습니다. 학습 탭에 질문을 남겨 두었으니 알려 주시면 기억하겠습니다.",
+    ]))
+}
 
 /// 검색해 볼 만한 문장인지 ("ㅁㄴㅇㄹ", "qwerasdf" 같은 건 안 찾음)
 fn looks_meaningful(text: &str) -> bool {
@@ -53,36 +78,26 @@ impl Skill for Chat {
             "who_are_you" => Reply::say(format!(
                 "저는 {name}입니다. 이 PC에서 일하는 비서입니다.\n왼쪽 위 메뉴(☰)를 누르시면 제가 할 수 있는 일을 보실 수 있습니다."
             )),
+            // 인사·감사는 정해진 공손한 대답이 더 안정적 (가르쳐 준 대답이 있으면 그게 먼저 나감)
+            "greet" => Reply::chat(pick(&["안녕하세요. 무엇을 도와드릴까요?", "반갑습니다. 필요한 게 있으시면 말씀해 주십시오.", "안녕하세요! 오늘 하루는 어떠셨습니까?"])),
+            "thanks" => Reply::chat(pick(&["별말씀을요. 언제든 불러 주십시오.", "도움이 됐다니 다행입니다.", "천만의 말씀입니다. 또 필요한 게 있으시면 말씀해 주십시오."])),
             _ => {
-                // 인사, 감사, 잡담 → 대화 모델이 직접 대답
+                // 잡담 → 대화 모델이 직접 대답
                 if let Some(t) = &cx.talker {
                     if t.familiarity(&cx.text) < UNFAMILIAR {
-                        // 처음 보는 말 → 지어내지 않고, 학습 탭에서 어떻게 대답할지 물어봄
-                        if let Some(k) = &cx.knowledge {
-                            let q = Question::Reply { phrase: cx.text.trim().to_string() };
-                            if k.ask(q.clone()) {
-                                cx.emit(crate::Event::Question { text: q.text() });
-                            }
-                        }
-                        // 인터넷에서 찾아보기 (말이 되는 문장일 때만)
-                        if looks_meaningful(&cx.text) {
-                            if let Ok(Some(found)) = crate::skills::web::search_text(cx.text.trim(), cx) {
-                                return Reply::say(format!(
-                                    "제가 아직 잘 모르는 말이라 인터넷에서 찾아봤습니다.\n\n{found}\n\n(학습 탭에서 어떻게 대답하면 좋을지 알려 주시면 다음부터 그렇게 대답하겠습니다.)"
-                                ));
-                            }
-                        }
-                        return Reply::say(pick(&[
-                            "죄송합니다. 아직 잘 모르는 말입니다. 학습 탭에서 어떻게 대답하면 좋을지 알려 주시면 배우겠습니다.",
-                            "그 말은 아직 배우지 못했습니다. 학습 탭에 질문을 남겨 두었으니 알려 주시면 기억하겠습니다.",
-                        ]));
+                        return unfamiliar(cx);
                     }
                     // 생각하기: 후보를 여러 개 만들고 (피드백·자연스러움·다양성·길이) 점수로 제일 좋은 걸 고름
                     let (depth, temp, top_k, long) = {
                         let c = cx.cfg();
                         (c.think_depth.clamp(1, 32), c.chat_temperature.clamp(0.1, 2.0), c.chat_top_k.clamp(1, 64), c.prefer_long_replies)
                     };
-                    let cands = t.candidates_scored(&cx.text, depth, temp, top_k);
+                    // 문장이 깨진 후보(자연스러움 낮음)는 버림
+                    let cands: Vec<(String, f32)> =
+                        t.candidates_scored(&cx.text, depth, temp, top_k).into_iter().filter(|(_, f)| *f >= MIN_FLUENCY).collect();
+                    if cands.is_empty() {
+                        return unfamiliar(cx); // 자연스럽게 대답할 자신이 없음 → 지어내지 않음
+                    }
                     let best = match &cx.knowledge {
                         Some(k) => k.choose(&cx.text, cands, long),
                         None => cands.into_iter().map(|(c, _)| c).find(|c| !c.trim().is_empty()),
