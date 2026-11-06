@@ -1,9 +1,10 @@
 """
 학습 스크립트:  python train.py
 - data.py로 데이터를 만들고 model.py의 트랜스포머를 처음부터 학습한다.
-- 결과: assistant_model.pt
+- 결과: assistant_model.pt (체크포인트) → 자동으로 ../models/ 에 내보내기
 CPU로도 몇 분이면 끝남. (그래픽카드 있으면 자동으로 사용)
 """
+import os
 import random
 import time
 import torch
@@ -76,8 +77,10 @@ def main():
         print(f"epoch {ep+1}/{EPOCHS}  loss {tot/(len(train)/BATCH):.4f}  "
               f"의도 정확도 {ci/len(val):.2%}  슬롯 정확도 {cs/ns:.2%}  ({time.time()-t0:.0f}초)")
 
-    save_bundle("assistant_model.pt", model.cpu(), tok, intents, tags)
+    save_bundle(os.path.join(os.path.dirname(os.path.abspath(__file__)), "assistant_model.pt"), model.cpu(), tok, intents, tags)
     print("저장 완료: assistant_model.pt")
+    import export
+    export.main()
 
 
 if __name__ == "__main__":

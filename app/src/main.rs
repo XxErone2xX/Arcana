@@ -1,0 +1,168 @@
+// 배포 버전에서는 검은 콘솔 창 안 뜨게
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+mod updater;
+
+use arcana_skills::{Assistant, Event, Reply, Response};
+use serde::Serialize;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use tauri::{AppHandle, Emitter, Manager, State};
+
+struct AppState {
+    assistant: Assistant,
+    update: Mutex<Option<updater::UpdateInfo>>,
+}
+
+#[derive(Serialize)]
+struct Info {
+    name: String,
+    version: String,
+    brain: String,
+    capabilities: Vec<&'static str>,
+    show_debug: bool,
+    auto_update: bool,
+    data_dir: String,
+    missing_skills: Vec<String>,
+}
+
+// ───────────────────── UI에서 부르는 명령들 (ui/js/api.js) ─────────────────────
+
+#[tauri::command]
+fn send(state: State<AppState>, text: String) -> Response {
+    state.assistant.handle(&text)
+}
+
+#[tauri::command]
+fn confirm(state: State<AppState>, intent: String) -> Reply {
+    state.assistant.confirm(&intent)
+}
+
+#[tauri::command]
+fn info(state: State<AppState>) -> Info {
+    let a = &state.assistant;
+    let c = a.config.read().unwrap();
+    Info {
+        name: c.name.clone(),
+        version: env!("CARGO_PKG_VERSION").into(),
+        brain: a.brain_name(),
+        capabilities: a.capabilities(),
+        show_debug: c.show_debug,
+        auto_update: c.auto_update,
+        data_dir: a.data_dir.display().to_string(),
+        missing_skills: a.missing_skills(),
+    }
+}
+
+#[tauri::command]
+fn set_option(state: State<AppState>, key: String, value: bool) {
+    let a = &state.assistant;
+    let mut c = a.config.write().unwrap();
+    match key.as_str() {
+        "show_debug" => c.show_debug = value,
+        "auto_update" => c.auto_update = value,
+        _ => return,
+    }
+    c.save(&a.data_dir);
+}
+
+/// 설정 파일을 메모장 등으로 열기
+#[tauri::command]
+fn open_config(state: State<AppState>) -> Result<(), String> {
+    let p = arcana_skills::Config::path(&state.assistant.data_dir);
+    open::that_detached(p).map_err(|e| e.to_string())
+}
+
+/// 설정 파일 고친 뒤 다시 읽기
+#[tauri::command]
+fn reload_config(state: State<AppState>) {
+    let a = &state.assistant;
+    *a.config.write().unwrap() = arcana_skills::Config::load_or_create(&a.data_dir);
+}
+
+#[tauri::command]
+async fn check_update(state: State<'_, AppState>) -> Result<updater::UpdateInfo, String> {
+    if cfg!(debug_assertions) {
+        return Err("개발 모드에서는 업데이트 안 함".into());
+    }
+    let info = tauri::async_runtime::spawn_blocking(updater::check)
+        .await
+        .map_err(|e| e.to_string())??;
+    *state.update.lock().unwrap() = Some(info.clone());
+    Ok(info)
+}
+
+#[tauri::command]
+async fn apply_update(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    let info = state
+        .update
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or("먼저 업데이트 확인 필요")?;
+    tauri::async_runtime::spawn_blocking(move || updater::apply(&info))
+        .await
+        .map_err(|e| e.to_string())??;
+    updater::relaunch();
+    app.exit(0);
+    Ok(())
+}
+
+// ───────────────────── 시작 ─────────────────────
+
+fn data_dir(app: &AppHandle) -> PathBuf {
+    std::env::var_os("APPDATA")
+        .map(|p| PathBuf::from(p).join("Arcana"))
+        .unwrap_or_else(|| {
+            app.path()
+                .app_data_dir()
+                .unwrap_or_else(|_| PathBuf::from("arcana-data"))
+        })
+}
+
+fn main() {
+    // 업데이트 직후 재시작이면 이전 프로세스가 완전히 꺼질 때까지 잠깐 대기
+    if std::env::args().any(|a| a == updater::RESTART_FLAG) {
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+    }
+
+    tauri::Builder::default()
+        // 이미 켜져 있으면 새로 안 켜고 기존 창을 앞으로
+        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.unminimize();
+                let _ = w.show();
+                let _ = w.set_focus();
+            }
+        }))
+        .setup(|app| {
+            let handle = app.handle().clone();
+            let events: arcana_skills::EventSink = Arc::new(move |e: Event| {
+                if let (Event::Alert { .. }, Some(w)) = (&e, handle.get_webview_window("main")) {
+                    let _ = w.unminimize();
+                    let _ = w.show();
+                    let _ = w.set_focus();
+                }
+                let _ = handle.emit("arcana://event", e);
+            });
+            let brain = arcana_core::builtin::load().map_err(|e| e.to_string())?;
+            let assistant = Assistant::new(Box::new(brain), data_dir(app.handle()), events);
+            app.manage(AppState {
+                assistant,
+                update: Mutex::new(None),
+            });
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            send,
+            confirm,
+            info,
+            set_option,
+            open_config,
+            reload_config,
+            check_update,
+            apply_update
+        ])
+        .run(tauri::generate_context!())
+        .expect("Arcana 실행 실패");
+}

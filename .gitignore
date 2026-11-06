@@ -1,4 +1,5 @@
+target/
 __pycache__/
 *.pyc
-memos.json
-screenshots/
+training/assistant_model.pt
+app/gen/

@@ -1,0 +1,21 @@
+[package]
+name = "arcana-skills"
+description = "Arcana 손발 — 스킬 시스템과 내장 스킬들"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+arcana-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono = "0.4"
+regex = "1"
+open = "5"
+urlencoding = "2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_System_Shutdown",
+] }

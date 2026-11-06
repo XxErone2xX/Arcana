@@ -1,0 +1,27 @@
+/* ─────────────────────────────────────────────
+   테마 — 색, 글꼴, 크기는 전부 여기서 바꾸면 됨
+   ───────────────────────────────────────────── */
+:root {
+  --bg:          #07080d;
+  --bg-2:        #0d0f18;
+  --panel:       #11131f;
+  --line:        #23263a;
+  --text:        #e6e9f5;
+  --text-dim:    #8a90a8;
+
+  --accent:      #00e5ff;   /* 메인 포인트 (시안) */
+  --accent-2:    #9b6eff;   /* 보조 포인트 (보라) */
+  --danger:      #ff4d6d;
+  --ok:          #3dffa8;
+
+  --user-bubble: #16203a;
+  --bot-bubble:  #10121d;
+
+  --radius:      0px;       /* 각진 스타일. 둥글게 하고 싶으면 8px 등 */
+  --corner:      10px;      /* 모서리 ㄱ 장식 길이 */
+  --corner-w:    2px;       /* 모서리 장식 두께 */
+  --corner-c:    var(--accent);
+
+  --font: "Pretendard", "Segoe UI", "Malgun Gothic", system-ui, sans-serif;
+  --mono: "JetBrains Mono", "Consolas", monospace;
+}

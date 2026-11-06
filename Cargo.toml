@@ -1,0 +1,27 @@
+# Arcana 워크스페이스
+#   crates/arcana-core    두뇌: 신경망 추론 엔진 + 토크나이저 + 문장 해석
+#   crates/arcana-skills  손발: 실제로 하는 일들 (스킬)
+#   app                   얼굴: 창(UI), 자동 업데이트, 위 둘을 연결
+[workspace]
+resolver = "2"
+members = ["crates/arcana-core", "crates/arcana-skills", "app"]
+
+[workspace.package]
+version = "0.1.0"           # ← 릴리스할 때 이것만 올리면 됨
+edition = "2021"
+authors = ["얼로니"]
+license = "MIT"
+repository = "https://github.com/XxErone2xX/Arcana"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+arcana-core = { path = "crates/arcana-core" }
+arcana-skills = { path = "crates/arcana-skills" }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

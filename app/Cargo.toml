@@ -1,0 +1,25 @@
+[package]
+name = "arcana"
+description = "Arcana — 처음부터 만든 PC 비서 AI"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "Arcana"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+arcana-core.workspace = true
+arcana-skills.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tauri = { version = "2", features = [] }
+tauri-plugin-single-instance = "2"
+ureq = { version = "2", features = ["json"] }
+self-replace = "1"
+semver = "1"
+open = "5"

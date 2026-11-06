@@ -1,0 +1,27 @@
+# 코드 올릴 때마다: 테스트 + 윈도우 exe 빌드 (Actions 탭 → 실행 결과 → Artifacts 에서 받을 수 있음)
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: 테스트 (Rust 엔진 = PyTorch 결과 검사 포함)
+        run: cargo test -p arcana-core -p arcana-skills --release
+
+      - name: Arcana.exe 빌드
+        run: cargo build -p arcana --release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Arcana-${{ github.sha }}
+          path: target/release/Arcana.exe
