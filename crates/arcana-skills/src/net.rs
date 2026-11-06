@@ -25,6 +25,7 @@ fn base(proxy: &Option<String>) -> ureq::AgentBuilder {
     let mut b = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(8))
         .timeout_read(Duration::from_secs(20))
+        .redirects(10)
         .user_agent(USER_AGENT);
     if let Some(p) = proxy.as_ref().and_then(|p| ureq::Proxy::new(p).ok()) {
         b = b.proxy(p);
@@ -120,6 +121,8 @@ pub fn describe(e: &ureq::Error) -> String {
                     | ureq::ErrorKind::InvalidProxyUrl
             ) {
                 "프록시 연결에 실패했습니다"
+            } else if matches!(t.kind(), ureq::ErrorKind::TooManyRedirects) {
+                "주소가 다른 주소로 계속 넘어가서(리다이렉트 반복) 열 수 없습니다"
             } else if low.contains("timed out") || low.contains("timeout") {
                 "응답 시간이 초과됐습니다"
             } else if matches!(t.kind(), ureq::ErrorKind::ConnectionFailed) {

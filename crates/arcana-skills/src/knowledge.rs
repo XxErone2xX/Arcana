@@ -252,6 +252,10 @@ pub struct Knowledge {
     robots: Mutex<HashMap<String, Robots>>,
     site_last: Mutex<HashMap<String, Instant>>,
     site_today: Mutex<(String, HashMap<String, usize>)>,
+    /// 사이트별 연속 실패 횟수 (3번이면 그날은 건너뜀)
+    site_fail: Mutex<HashMap<String, usize>>,
+    /// 여러 사이트에 걸친 연속 연결 실패 (5번이면 진짜 인터넷 문제로 보고 쉼)
+    net_fail_streak: Mutex<usize>,
     docs: RwLock<Vec<Doc>>,
     index: RwLock<HashMap<String, usize>>,
     frontier: Mutex<Frontier>,
@@ -382,6 +386,8 @@ impl Knowledge {
             robots: Mutex::new(HashMap::new()),
             site_last: Mutex::new(HashMap::new()),
             site_today: Mutex::new((String::new(), HashMap::new())),
+            site_fail: Mutex::new(HashMap::new()),
+            net_fail_streak: Mutex::new(0),
             dir,
             docs: RwLock::new(docs),
             index: RwLock::new(index),
@@ -700,10 +706,14 @@ impl Knowledge {
             let d = chrono::Local::now().format("%Y-%m-%d").to_string();
             if t.0 != d {
                 *t = (d, HashMap::new());
+                self.site_fail.lock().unwrap().clear();
             }
             if *t.1.get(&host).unwrap_or(&0) >= s.site_daily_limit {
                 return Ok(Step::Skip);
             }
+        }
+        if *self.site_fail.lock().unwrap().get(&host).unwrap_or(&0) >= 3 {
+            return Ok(Step::Skip); // 오늘 계속 실패한 사이트
         }
         let robots = self.robots_for(&u);
         let path = match u.query() {
@@ -739,9 +749,31 @@ impl Knowledge {
             .or_insert(0) += 1;
 
         let resp = match net::get(u.as_str(), &[]) {
-            Ok(r) => r,
-            Err(ureq::Error::Status(_, _)) => return Ok(Step::Skip),
-            Err(e) => return Err(net::describe(&e)),
+            Ok(r) => {
+                *self.net_fail_streak.lock().unwrap() = 0;
+                self.site_fail.lock().unwrap().remove(&host);
+                r
+            }
+            Err(ureq::Error::Status(_, _)) => {
+                *self.net_fail_streak.lock().unwrap() = 0; // 서버가 대답은 했으니 인터넷은 됨
+                return Ok(Step::Skip);
+            }
+            Err(e) => {
+                // 이 페이지·사이트만의 문제(리다이렉트 반복, 잘못된 응답, 꺼진 서버 등)는 건너뛰고 계속
+                *self
+                    .site_fail
+                    .lock()
+                    .unwrap()
+                    .entry(host.clone())
+                    .or_insert(0) += 1;
+                let mut streak = self.net_fail_streak.lock().unwrap();
+                *streak += 1;
+                if *streak >= 5 {
+                    *streak = 0;
+                    return Err(net::describe(&e)); // 여러 사이트가 연속으로 실패 → 인터넷 문제
+                }
+                return Ok(Step::Skip);
+            }
         };
         if !resp.content_type().contains("html") {
             return Ok(Step::Skip);
