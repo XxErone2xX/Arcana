@@ -201,6 +201,14 @@ pub trait Talker: Send + Sync {
     fn reply_scored(&self, text: &str) -> (String, f32) {
         (self.reply(text), 1.0)
     }
+    /// 이 말이 배운 말들과 닮은 정도 0~1
+    fn familiarity(&self, _text: &str) -> f32 {
+        1.0
+    }
+    /// 대답 후보 여러 개 (피드백 점수로 고르기 위해)
+    fn candidates(&self, text: &str, n: usize) -> Vec<String> {
+        (0..n).map(|_| self.reply(text)).collect()
+    }
     fn name(&self) -> String;
 }
 
@@ -225,6 +233,8 @@ pub struct ArcanaChat {
     rng: std::sync::Mutex<gpt::Rng>,
     /// 학습 때 본 입력 문장들 (두 글자씩 묶음)
     known: Vec<std::collections::HashSet<(char, char)>>,
+    /// 한 글자짜리 등 정확히 같으면 아는 말
+    known_exact: std::collections::HashSet<Vec<char>>,
 }
 
 /// 비교용 정규화: 문장부호·공백 제거, 소문자, ㅋㅋ·ㅠㅠ 같은 자모만 있는 부분 제거
@@ -280,11 +290,22 @@ impl ArcanaChat {
             temperature: 0.7,
             top_k: 8,
             rng: std::sync::Mutex::new(gpt::Rng::seeded_by_time()),
+            // 템플릿의 | 는 단어 자리 → 양쪽을 따로 묶음 ("새 | 샀어" 가 "새샀어" 가 되지 않게)
             known: meta
                 .known_inputs
                 .iter()
-                .map(|s| bigrams(&familiar_key(s)))
+                .map(|s| {
+                    s.split('|')
+                        .flat_map(|part| bigrams(&familiar_key(part)))
+                        .collect::<std::collections::HashSet<_>>()
+                })
                 .filter(|g| !g.is_empty())
+                .collect(),
+            known_exact: meta
+                .known_inputs
+                .iter()
+                .filter(|s| !s.contains('|'))
+                .map(|s| familiar_key(s))
                 .collect(),
         })
     }
@@ -294,7 +315,11 @@ impl ArcanaChat {
         if self.known.is_empty() {
             return 1.0; // 목록이 없는 모델이면 판단 안 함
         }
-        let gx = bigrams(&familiar_key(text));
+        let key = familiar_key(text);
+        if self.known_exact.contains(&key) {
+            return 1.0;
+        }
+        let gx = bigrams(&key);
         if gx.is_empty() {
             return 0.0;
         }
@@ -376,6 +401,22 @@ impl Talker for ArcanaChat {
             self.generate_scored(text, self.temperature, &mut rng).0,
             fam,
         )
+    }
+
+    fn familiarity(&self, text: &str) -> f32 {
+        ArcanaChat::familiarity(self, text)
+    }
+
+    fn candidates(&self, text: &str, n: usize) -> Vec<String> {
+        let mut rng = self.rng.lock().unwrap();
+        let mut out: Vec<String> = Vec::new();
+        for _ in 0..n {
+            let r = self.generate_scored(text, self.temperature, &mut rng).0;
+            if !out.contains(&r) {
+                out.push(r);
+            }
+        }
+        out
     }
 
     fn name(&self) -> String {

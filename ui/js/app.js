@@ -55,7 +55,7 @@ function button(text, cls) {
   return b;
 }
 
-function showReply(reply, r) {
+function showReply(reply, r, userText) {
   const body = addMsg("bot", reply.text, { error: reply.error, debug: info?.show_debug && r ? debugLine(r) : null });
   if (reply.confirm && r) {
     const box = document.createElement("div");
@@ -67,7 +67,43 @@ function showReply(reply, r) {
     box.append(yes, no);
     body.appendChild(box);
   }
+  if (reply.from_chat && userText) body.appendChild(feedbackBar(userText, reply.text));
   if (reply.quit) setTimeout(() => api.window.close(), 900);
+}
+
+// ───────────── 👍/👎 (3단계: 피드백 학습) ─────────────
+const ICON_UP = '<svg viewBox="0 0 24 24"><path d="M7 11v9H4v-9h3zm0 0l4-8c1.5 0 2.5 1 2.5 2.5V9h5a2 2 0 0 1 2 2.3l-1.2 7A2 2 0 0 1 17.3 20H7"/></svg>';
+const ICON_DOWN = '<svg viewBox="0 0 24 24"><path d="M17 13V4h3v9h-3zm0 0l-4 8c-1.5 0-2.5-1-2.5-2.5V15h-5a2 2 0 0 1-2-2.3l1.2-7A2 2 0 0 1 6.7 4H17"/></svg>';
+
+function feedbackBar(userText, replyText) {
+  const bar = document.createElement("div");
+  bar.className = "fb";
+  const up = button("", "fb-btn");
+  const down = button("", "fb-btn");
+  up.innerHTML = ICON_UP;
+  down.innerHTML = ICON_DOWN;
+  up.title = "좋은 대답";
+  down.title = "별로인 대답";
+  const done = (btn) => { up.disabled = down.disabled = true; btn.classList.add("chosen"); };
+  up.onclick = async () => { done(up); toast(await api.feedback(userText, replyText, 1, null)); };
+  down.onclick = () => {
+    done(down);
+    const form = document.createElement("form");
+    form.className = "fb-better";
+    const inp = Object.assign(document.createElement("input"), { placeholder: "더 좋은 대답을 알려 주세요 (비워도 됨)", maxLength: 200 });
+    const ok = button("보내기", "btn primary");
+    ok.type = "submit";
+    form.append(inp, ok);
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      form.remove();
+      toast(await api.feedback(userText, replyText, -1, inp.value.trim() || null));
+    };
+    bar.after(form);
+    inp.focus();
+  };
+  bar.append(up, down);
+  return bar;
 }
 
 // ───────────── 보내기 ─────────────
@@ -83,7 +119,7 @@ async function submit(text) {
   try {
     const r = await api.send(text);
     t.remove();
-    showReply(r.reply, r);
+    showReply(r.reply, r, text);
   } catch (e) {
     t.remove();
     addMsg("bot", "오류가 발생했습니다. " + e, { error: true });

@@ -48,6 +48,20 @@ async fn study(state: State<'_, AppState>, text: String) -> Result<StudyResult, 
         .map_err(|e| e.to_string())
 }
 
+/// 대답 평가 (👍/👎)
+#[tauri::command]
+fn feedback(
+    state: State<AppState>,
+    user: String,
+    reply: String,
+    rating: i8,
+    better: Option<String>,
+) -> String {
+    state
+        .assistant
+        .feedback(&user, &reply, rating, better.as_deref())
+}
+
 #[tauri::command]
 fn study_status(state: State<AppState>) -> StudyResult {
     state.assistant.study_state(vec![])
@@ -199,6 +213,7 @@ fn main() {
             send,
             study,
             study_status,
+            feedback,
             confirm,
             info,
             set_option,

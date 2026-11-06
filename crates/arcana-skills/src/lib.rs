@@ -72,6 +72,8 @@ pub struct Reply {
     pub quit: bool,
     /// 실패했는지 (UI에서 색 다르게 표시)
     pub error: bool,
+    /// 대화 모델이 만든 대답인지 (UI가 👍/👎 버튼을 붙임)
+    pub from_chat: bool,
 }
 
 impl Reply {
@@ -85,6 +87,13 @@ impl Reply {
         Self {
             text: t.into(),
             error: true,
+            ..Default::default()
+        }
+    }
+    pub fn chat(t: impl Into<String>) -> Self {
+        Self {
+            text: t.into(),
+            from_chat: true,
             ..Default::default()
         }
     }
@@ -196,7 +205,7 @@ impl Assistant {
             return Response {
                 understanding: u,
                 fallback: false,
-                reply: Reply::say(r),
+                reply: Reply::chat(r),
             };
         }
         let threshold = self.config.read().unwrap().threshold;
@@ -265,9 +274,9 @@ impl Assistant {
                 "status" | "상태" => {
                     let s = k.stats();
                     lines.push(format!(
-                        "{} · 알고 있는 문서 {}개 · 읽을 예정 {}개 · 배운 대답 {}개 · 남은 질문 {}개",
+                        "{} · 알고 있는 문서 {}개 · 읽을 예정 {}개 · 배운 대답 {}개 · 남은 질문 {}개 · 피드백 👍{} 👎{}",
                         if self.config.read().unwrap().self_study { "학습 중" } else { "멈춤" },
-                        s.count, s.queued, s.taught, s.questions
+                        s.count, s.queued, s.taught, s.questions, s.likes, s.dislikes
                     ));
                     if !s.recent.is_empty() {
                         lines.push(format!("최근에 배운 것: {}", s.recent.join(", ")));
@@ -304,6 +313,7 @@ impl Assistant {
                     lines.push("/Teach 말 = 대답   대답 직접 가르치기".into());
                     lines
                         .push("그 외에 입력하시는 말은 제 질문에 대한 대답으로 받겠습니다.".into());
+                    lines.push("대화 탭의 👍/👎 피드백은 training\\피드백_학습하기.bat 으로 모델에 학습시킬 수 있습니다.".into());
                 }
             }
         } else if !input.is_empty() {
@@ -313,6 +323,15 @@ impl Assistant {
             }
         }
         self.study_state(lines)
+    }
+
+    /// 대답 평가 (👍 = 1, 👎 = -1, better = 👎일 때 더 좋은 대답)
+    pub fn feedback(&self, user: &str, reply: &str, rating: i8, better: Option<&str>) -> String {
+        let msg = self.knowledge.add_feedback(user, reply, rating, better);
+        if rating < 0 && better.map_or(true, |b| b.trim().is_empty()) {
+            self.emit_question();
+        }
+        msg
     }
 
     fn emit_question(&self) {

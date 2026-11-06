@@ -137,8 +137,8 @@ def known_inputs():
     out = set()
     for users, _ in chat_data.TOPICS:
         for u in users:
-            t = re.sub(r"\{[A-Z]+[^}]*\}", " ", u).strip()
-            if len(re.sub(r"\s", "", t)) >= 2:
+            t = re.sub(r"\{[A-Z]+[^}]*\}", "|", u).strip()  # | = 단어 자리 (양쪽을 이어 붙이지 않음)
+            if len(re.sub(r"[\s|]", "", t)) >= 2:
                 out.add(t)
     return sorted(out)
 

@@ -61,6 +61,18 @@ Arcana가 질문하는 경우:
 배운 것은 `%APPDATA%\Arcana\knowledge\` 에 저장돼. 가르쳐 준 대답(`taught.jsonl`)은 형식이 학습 데이터와 같아서,
 `python train_chat.py --data %APPDATA%\Arcana\knowledge\taught.jsonl` 로 대화 모델 재학습에도 쓸 수 있어.
 
+## 피드백 학습 (3단계)
+
+큰 AI들이 쓰는 3단계 학습(사람 피드백으로 더 좋은 대답 고르기)을 작게 만든 것.
+
+1. **피드백 모으기** — 대화 탭에서 Arcana 대답 밑의 👍/👎. 👎를 누르면 더 좋은 대답을 알려 줄 수 있음
+2. **바로 반영** — 대답 후보를 4개 만들고, 지금까지의 피드백으로 점수를 매겨 제일 좋은 걸 고름 (👎 받은 대답은 다시 안 함).
+   👎 + 더 좋은 대답은 즉시 기억
+3. **모델 재학습 (DPO)** — `training\피드백_학습하기.bat` 더블클릭.
+   좋은 대답 확률은 올리고 나쁜 대답 확률은 내리는 방식으로 모델 숫자 자체를 고침.
+   학습 전 모델을 기준으로 붙잡아 둬서 말투가 망가지지 않음. 비슷한 말에도 일반화됨
+   (예: "새 키보드 샀어"에 피드백 → "새 모니터 샀어"도 고쳐짐). 이전 모델은 `models\backup-날짜\` 에 보관
+
 ## Arcana 모델
 
 처음부터 직접 만든 모델. 구조만 공개 논문(BERT, GPT 계열)을 참고했고, 코드·학습 데이터·가중치는 전부 직접.
@@ -106,6 +118,7 @@ Arcana/
 │  ├─ chat_data.py        대화 데이터 생성기 (합니다체) — 새 대화 주제는 여기에
 │  ├─ chat_model.py       대화 모델 정의 + 크기 설정(PRESETS)
 │  ├─ train_chat.py       대화 모델 학습 (--size small/base/large)
+│  ├─ train_feedback.py   피드백 학습 (DPO) — 피드백_학습하기.bat
 │  └─ export.py           Rust가 읽는 형식으로 내보내기
 ├─ models/                🧠 학습 결과 (exe 안에 내장됨)
 │  ├─ arcana-nlu.safetensors   가중치 (HuggingFace 표준 형식)

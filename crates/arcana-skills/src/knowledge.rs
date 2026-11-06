@@ -10,6 +10,7 @@
 //!   frontier.json    다음에 읽을 문서 목록
 //!   questions.json   사용자에게 물어볼 질문들
 //!   taught.jsonl     사용자가 가르쳐 준 대답  (형식이 train_chat.py --data 와 같아서 재학습에도 쓸 수 있음)
+//!   feedback.jsonl   대답에 대한 👍/👎 (+ 더 좋은 대답) → training/train_feedback.py 가 이걸로 학습
 //!
 //! 위키백과 내용은 CC BY-SA 라이선스라서 대답할 때 항상 출처를 같이 보여줌.
 
@@ -110,6 +111,19 @@ struct Frontier {
     queue: VecDeque<String>,
 }
 
+/// 대답에 대한 평가 (3단계: 피드백 학습)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Feedback {
+    pub user: String,
+    pub reply: String,
+    /// 1 = 👍, -1 = 👎
+    pub rating: i8,
+    /// 👎일 때 사용자가 알려 준 더 좋은 대답
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub better: Option<String>,
+    pub time: String,
+}
+
 #[derive(Serialize, Deserialize)]
 struct Taught {
     user: String,
@@ -124,6 +138,7 @@ pub struct Knowledge {
     seen: Mutex<HashSet<String>>,
     questions: Mutex<VecDeque<Question>>,
     taught: RwLock<HashMap<String, String>>,
+    feedback: RwLock<Vec<Feedback>>,
     today: Mutex<(String, usize)>,
     agent: ureq::Agent,
 }
@@ -134,6 +149,8 @@ pub struct Stats {
     pub queued: usize,
     pub taught: usize,
     pub questions: usize,
+    pub likes: usize,
+    pub dislikes: usize,
     pub recent: Vec<String>,
 }
 
@@ -227,6 +244,10 @@ impl Knowledge {
             .filter_map(|l| serde_json::from_str::<Taught>(l).ok())
             .map(|t| (phrase_key(&t.user), t.bot))
             .collect();
+        let feedback = read("feedback.jsonl")
+            .lines()
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .collect();
         let agent = ureq::AgentBuilder::new()
             .timeout_connect(Duration::from_secs(5))
             .timeout_read(Duration::from_secs(15))
@@ -240,6 +261,7 @@ impl Knowledge {
             seen: Mutex::new(seen),
             questions: Mutex::new(questions),
             taught: RwLock::new(taught),
+            feedback: RwLock::new(feedback),
             today: Mutex::new((String::new(), 0)),
             agent,
         })
@@ -252,6 +274,20 @@ impl Knowledge {
             queued: self.frontier.lock().unwrap().queue.len(),
             taught: self.taught.read().unwrap().len(),
             questions: self.questions.lock().unwrap().len(),
+            likes: self
+                .feedback
+                .read()
+                .unwrap()
+                .iter()
+                .filter(|f| f.rating > 0)
+                .count(),
+            dislikes: self
+                .feedback
+                .read()
+                .unwrap()
+                .iter()
+                .filter(|f| f.rating < 0)
+                .count(),
             recent: docs.iter().rev().take(8).map(|d| d.title.clone()).collect(),
         }
     }
@@ -515,6 +551,81 @@ impl Knowledge {
             .flatten()
     }
 
+    // ───────────── 피드백 (3단계) ─────────────
+
+    /// 👍/👎 저장. 👎 + 더 좋은 대답이면 바로 가르친 대답으로도 등록
+    pub fn add_feedback(
+        &self,
+        user: &str,
+        reply: &str,
+        rating: i8,
+        better: Option<&str>,
+    ) -> String {
+        let better = better
+            .map(str::trim)
+            .filter(|b| !b.is_empty())
+            .map(String::from);
+        let f = Feedback {
+            user: user.trim().into(),
+            reply: reply.trim().into(),
+            rating: rating.signum(),
+            better: better.clone(),
+            time: now(),
+        };
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(self.dir.join("feedback.jsonl"))
+        {
+            let _ = writeln!(file, "{}", serde_json::to_string(&f).unwrap());
+        }
+        self.feedback.write().unwrap().push(f);
+        match (rating > 0, better) {
+            (true, _) => "감사합니다. 이런 대답을 더 자주 하겠습니다.".into(),
+            (false, Some(b)) => {
+                self.teach(user, &b);
+                "알겠습니다. 다음부터는 알려 주신 대로 대답하겠습니다.".into()
+            }
+            (false, None) => {
+                self.ask(Question::Reply {
+                    phrase: user.trim().into(),
+                });
+                "죄송합니다. 그 대답은 피하겠습니다. 학습 탭에서 더 좋은 대답을 알려 주시면 배우겠습니다.".into()
+            }
+        }
+    }
+
+    /// 보상 점수: 비슷한 말에 👍 받은 대답과 닮으면 +, 👎 받은 대답과 닮으면 −
+    /// (RLHF의 "좋은 대답 판별기"를 아주 작게 만든 것. 모델 재학습 전에도 피드백이 바로 반영됨)
+    pub fn reward(&self, user: &str, candidate: &str) -> f32 {
+        let (u, c) = (phrase_key(user), phrase_key(candidate));
+        let mut score = 0.0;
+        for f in self.feedback.read().unwrap().iter() {
+            let rel = bigram_sim(&u, &phrase_key(&f.user));
+            if rel < 0.6 {
+                continue;
+            }
+            let sim = bigram_sim(&c, &phrase_key(&f.reply));
+            score += rel * sim * f.rating as f32;
+            if f.rating < 0 && c == phrase_key(&f.reply) {
+                score -= 10.0; // 👎 받은 대답 그대로는 다시 안 함
+            }
+        }
+        score
+    }
+
+    /// 후보 대답들 중 보상이 제일 높은 것 (best-of-N)
+    pub fn pick_best(&self, user: &str, candidates: Vec<String>) -> Option<String> {
+        let mut best: Option<(f32, String)> = None;
+        for c in candidates.into_iter().filter(|c| !c.trim().is_empty()) {
+            let r = self.reward(user, &c);
+            if best.as_ref().map_or(true, |(b, _)| r > *b) {
+                best = Some((r, c));
+            }
+        }
+        best.map(|(_, c)| c)
+    }
+
     // ───────────── 스스로 공부 ─────────────
 
     /// 한 걸음: 대기열에서 하나 꺼내 공부. 공부한 제목을 돌려줌 (없으면 None)
@@ -678,11 +789,29 @@ mod tests {
             .contains("배웠습니다"));
         assert!(k.lookup("얼로니").is_some());
         assert!(k.current_question().is_none());
+
+        // 피드백: 👎 받은 대답은 안 고르고, 👍 받은 쪽을 고름
+        k.add_feedback("심심해", "TSB 한 판 어떠십니까?", -1, None);
+        k.add_feedback("심심해", "유튜브에서 재미있는 영상 찾아 드릴까요?", 1, None);
+        let pick = k.pick_best(
+            "심심해 ㅋㅋ",
+            vec![
+                "TSB 한 판 어떠십니까?".into(),
+                "유튜브 영상 찾아 드릴까요?".into(),
+            ],
+        );
+        assert_eq!(pick.as_deref(), Some("유튜브 영상 찾아 드릴까요?"));
+        k.add_feedback("뭐함", "네.", -1, Some("대기하고 있습니다."));
+        assert_eq!(
+            k.taught_reply("뭐함").as_deref(),
+            Some("대기하고 있습니다.")
+        );
         drop(k);
 
         let k2 = Knowledge::open(dir.clone()); // 다시 열어도 남아있는지
         assert_eq!(k2.stats().count, 2);
         assert_eq!(k2.stats().taught, 1);
+        assert_eq!((k2.stats().likes, k2.stats().dislikes), (1, 2));
         let _ = std::fs::remove_dir_all(dir);
     }
 }

@@ -78,3 +78,20 @@ def main(ckpt=os.path.join(HERE, "assistant_model.pt")):
 
 if __name__ == "__main__":
     main(*sys.argv[1:])
+
+
+def read_safetensors(path):
+    """write_safetensors 로 만든 파일 읽기 → {이름: 텐서}"""
+    import numpy as np
+    with open(path, "rb") as f:
+        n = struct.unpack("<Q", f.read(8))[0]
+        header = json.loads(f.read(n))
+        body = f.read()
+    out = {}
+    for name, h in header.items():
+        if name == "__metadata__":
+            continue
+        a, b = h["data_offsets"]
+        arr = np.frombuffer(body[a:b], dtype=np.float32).reshape(h["shape"])
+        out[name] = torch.from_numpy(arr.copy())
+    return out
