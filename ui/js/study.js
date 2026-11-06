@@ -94,7 +94,8 @@ api.onEvent((e) => {
   if (e.kind === "learned") {
     const b = document.createElement("b");
     b.textContent = e.title;
-    line([b, `${eul(e.title)} 공부했습니다. (알고 있는 문서 ${e.count}개)`], "learned");
+    const site = Object.assign(document.createElement("span"), { className: "site", textContent: e.site });
+    line([b, `${eul(e.title)} 공부했습니다. (알고 있는 문서 ${e.count}개) `, site], "learned");
     refresh();
   } else if (e.kind === "study_log") {
     line(e.text);

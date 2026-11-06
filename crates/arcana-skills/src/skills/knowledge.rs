@@ -108,8 +108,14 @@ impl Skill for Knowledge {
                         text: format!("'{topic}'에 대해 알려 주실 수 있습니까?"),
                     });
                 }
+                // 위키백과에 없으면 인터넷 검색으로
+                if let Ok(Some(found)) = crate::skills::web::search_text(topic, cx) {
+                    return Reply::say(format!(
+                        "위키백과에는 '{topic}' 문서가 없어서 인터넷에서 찾아봤습니다.\n\n{found}"
+                    ));
+                }
                 Reply::say(format!(
-                    "'{topic}'에 대한 문서를 찾지 못했습니다. 학습 탭에서 무엇인지 알려 주시면 기억해 두겠습니다."
+                    "'{topic}'에 대한 내용을 찾지 못했습니다. 학습 탭에서 무엇인지 알려 주시면 기억해 두겠습니다."
                 ))
             }
             Err(e) => Reply::error(format!("'{topic}'에 대해 알아보지 못했습니다. {e}")),

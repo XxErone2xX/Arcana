@@ -12,6 +12,21 @@ use arcana_core::Understanding;
 
 pub struct Chat;
 
+/// 검색해 볼 만한 문장인지 ("ㅁㄴㅇㄹ", "qwerasdf" 같은 건 안 찾음)
+fn looks_meaningful(text: &str) -> bool {
+    let syllables = text.chars().filter(|c| ('가'..='힣').contains(c)).count();
+    let words: Vec<&str> = text.split_whitespace().collect();
+    let latin_words = words
+        .iter()
+        .filter(|w| {
+            w.chars().all(|c| c.is_ascii_alphabetic())
+                && w.len() >= 2
+                && w.chars().any(|c| "aeiouAEIOU".contains(c))
+        })
+        .count();
+    syllables >= 3 || latin_words >= 2
+}
+
 fn pick<'a>(opts: &[&'a str]) -> &'a str {
     let n = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -51,6 +66,14 @@ impl Skill for Chat {
                                 cx.emit(crate::Event::Question { text: q.text() });
                             }
                         }
+                        // 인터넷에서 찾아보기 (말이 되는 문장일 때만)
+                        if looks_meaningful(&cx.text) {
+                            if let Ok(Some(found)) = crate::skills::web::search_text(cx.text.trim(), cx) {
+                                return Reply::say(format!(
+                                    "제가 아직 잘 모르는 말이라 인터넷에서 찾아봤습니다.\n\n{found}\n\n(학습 탭에서 어떻게 대답하면 좋을지 알려 주시면 다음부터 그렇게 대답하겠습니다.)"
+                                ));
+                            }
+                        }
                         return Reply::say(pick(&[
                             "죄송합니다. 아직 잘 모르는 말입니다. 학습 탭에서 어떻게 대답하면 좋을지 알려 주시면 배우겠습니다.",
                             "그 말은 아직 배우지 못했습니다. 학습 탭에 질문을 남겨 두었으니 알려 주시면 기억하겠습니다.",
@@ -73,5 +96,17 @@ impl Skill for Chat {
                 })
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn meaningful() {
+        assert!(super::looks_meaningful("주식 사야 될까"));
+        assert!(super::looks_meaningful("what is rust language"));
+        assert!(!super::looks_meaningful("ㅁㄴㅇㄹ"));
+        assert!(!super::looks_meaningful("qwerasdf"));
+        assert!(!super::looks_meaningful("흐ㅇ"));
     }
 }

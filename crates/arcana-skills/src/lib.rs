@@ -9,6 +9,7 @@
 //! 3. 새 의도면 `training/data.py` 에 문장 템플릿 추가 후 재학습
 
 pub mod config;
+pub mod crawler;
 pub mod knowledge;
 pub mod skills;
 pub mod util;
@@ -30,7 +31,11 @@ pub enum Event {
     /// 그냥 대화창에 말 한 줄 추가
     Say { text: String },
     /// 스스로 공부해서 새 문서를 배움 (학습 탭에 표시)
-    Learned { title: String, count: usize },
+    Learned {
+        title: String,
+        site: String,
+        count: usize,
+    },
     /// 학습 탭에 상태 한 줄
     StudyLog { text: String },
     /// Arcana가 사용자에게 질문 (학습 탭)
@@ -208,9 +213,28 @@ impl Assistant {
                 reply: Reply::chat(r),
             };
         }
+        // 2) 웹 주소가 들어 있으면 그 페이지 읽기
+        if let Some(url) = skills::web::find_url(text) {
+            let mut slots = std::collections::BTreeMap::new();
+            slots.insert("URL".to_string(), url);
+            let u = Understanding {
+                intent: "read_page".into(),
+                confidence: 1.0,
+                slots,
+            };
+            let reply = match self.route.get("read_page") {
+                Some(&i) => self.skills[i].run("read_page", &u, &self.ctx(text)),
+                None => Reply::error("페이지 읽기 스킬이 없습니다."),
+            };
+            return Response {
+                understanding: u,
+                fallback: false,
+                reply,
+            };
+        }
         let threshold = self.config.read().unwrap().threshold;
         let fallback = u.confidence < threshold;
-        // 2) 확신이 낮으면(잘 못 알아들음) 학습 탭에서 어떻게 대답할지 물어보기
+        // 3) 확신이 낮으면(잘 못 알아들음) 학습 탭에서 어떻게 대답할지 물어보기
         if fallback && text.trim().chars().count() >= 2 {
             let q = knowledge::Question::Reply {
                 phrase: text.trim().to_string(),
@@ -262,7 +286,8 @@ impl Assistant {
             match name.to_lowercase().as_str() {
                 "start" | "시작" => {
                     set_running(true);
-                    lines.push("학습을 시작합니다. 앱이 켜져 있는 동안 위키백과를 조금씩 읽으며 공부하겠습니다.".into());
+                    lines.push("학습을 시작합니다. 앱이 켜져 있는 동안 위키백과(한국어·영어·일본어)와 여러 웹사이트를 조금씩 읽으며 공부하겠습니다.".into());
+                    lines.push("사이트 규칙(robots.txt)을 지키고, 같은 사이트는 천천히 읽으며, 위험한 사이트는 건너뜁니다.".into());
                     lines.push("모르는 게 생기면 여기서 여쭤보겠습니다.".into());
                 }
                 "stop" | "중지" | "멈춰" => {

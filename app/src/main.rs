@@ -102,6 +102,15 @@ fn set_option(state: State<AppState>, key: String, value: bool) {
     c.save(&a.data_dir);
 }
 
+/// 대답 속 링크 클릭 → 기본 브라우저로 열기 (http/https만)
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err("웹 주소만 열 수 있습니다.".into());
+    }
+    open::that_detached(url).map_err(|e| e.to_string())
+}
+
 /// 설정 파일을 메모장 등으로 열기
 #[tauri::command]
 fn open_config(state: State<AppState>) -> Result<(), String> {
@@ -213,6 +222,7 @@ fn main() {
             send,
             study,
             study_status,
+            open_url,
             feedback,
             confirm,
             info,

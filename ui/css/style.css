@@ -40,6 +40,7 @@ svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width:
 .line time { flex: none; color: var(--text-dim); font: 11.5px var(--mono); padding-top: 2px; }
 .line.me { color: var(--text-dim); }
 .line.learned span b { font-weight: 600; }
+.line .site { color: var(--text-dim); font-size: 12px; }
 .line.ask { color: var(--text); }
 .feed-empty { min-height: 100%; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; gap: 10px; color: var(--text-dim); padding-bottom: 40px; }
 .feed-empty h1 { font-size: 20px; color: var(--text); font-weight: 600; }
@@ -65,6 +66,8 @@ svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width:
 .msg.bot .body { max-width: 100%; }
 .msg.error .body { color: var(--danger); }
 .msg.alert .body { border-left: 3px solid var(--ok); padding-left: 12px; }
+.link { color: inherit; text-decoration: underline; text-decoration-color: var(--text-dim); text-underline-offset: 2px; word-break: break-all; }
+.link:hover { text-decoration-color: var(--text); }
 .debug { display: block; margin-top: 6px; font: 11.5px var(--mono); color: var(--text-dim); }
 .actions { display: flex; gap: 8px; margin-top: 10px; }
 

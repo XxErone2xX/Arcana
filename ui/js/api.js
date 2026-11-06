@@ -12,6 +12,7 @@ export const api = isApp
       confirm: (intent) => invoke("confirm", { intent }),
       study: (text) => invoke("study", { text }),
       studyStatus: () => invoke("study_status"),
+      openUrl: (url) => invoke("open_url", { url }),
       feedback: (user, reply, rating, better) => invoke("feedback", { user, reply, rating, better }),
       info: () => invoke("info"),
       setOption: (key, value) => invoke("set_option", { key, value }),
@@ -47,6 +48,7 @@ function mock() {
       return { lines: text ? [`(미리보기) ${text}`] : [], running, question: "'수성'은(는) 뜻이 여러 개입니다. 어떤 걸 공부할까요? (번호 또는 이름)\n1. 수성 (행성)\n2. 수성 (화학)", stats: { count: 12, queued: 80, taught: 1, questions: 1, recent: ["블랙홀"] } };
     },
     async studyStatus() { return this.study(""); },
+    async openUrl(url) { window.open(url, "_blank"); },
     async feedback(u, r, rating, better) { return rating > 0 ? "감사합니다. 이런 대답을 더 자주 하겠습니다." : better ? "알겠습니다. 다음부터는 알려 주신 대로 대답하겠습니다." : "죄송합니다. 그 대답은 피하겠습니다."; },
     async info() {
       return {

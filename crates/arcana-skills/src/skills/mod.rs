@@ -7,7 +7,7 @@ mod knowledge;
 mod memo;
 mod system;
 mod timer;
-mod web;
+pub mod web;
 
 use crate::Skill;
 

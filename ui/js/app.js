@@ -19,7 +19,7 @@ function addMsg(who, text, opts = {}) {
   el.className = `msg ${who}` + (opts.error ? " error" : "") + (opts.alert ? " alert" : "");
   const body = document.createElement("div");
   body.className = "body";
-  body.textContent = text;
+  linkify(body, text);
   if (opts.debug) {
     const d = document.createElement("span");
     d.className = "debug";
@@ -30,6 +30,23 @@ function addMsg(who, text, opts = {}) {
   log.appendChild(el);
   log.scrollTop = log.scrollHeight;
   return body;
+}
+
+// 대답 속 웹 주소를 누를 수 있는 링크로 (기본 브라우저로 열림)
+function linkify(el, text) {
+  const re = /https?:\/\/[^\s<>"'）)]+/g;
+  let last = 0;
+  for (const m of text.matchAll(re)) {
+    el.appendChild(document.createTextNode(text.slice(last, m.index)));
+    const a = document.createElement("a");
+    a.href = "#";
+    a.className = "link";
+    a.textContent = m[0];
+    a.onclick = (e) => { e.preventDefault(); api.openUrl(m[0]); };
+    el.appendChild(a);
+    last = m.index + m[0].length;
+  }
+  el.appendChild(document.createTextNode(text.slice(last)));
 }
 
 function typing() {

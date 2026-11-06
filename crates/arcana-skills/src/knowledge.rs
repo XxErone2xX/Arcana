@@ -14,15 +14,16 @@
 //!
 //! 위키백과 내용은 CC BY-SA 라이선스라서 대답할 때 항상 출처를 같이 보여줌.
 
+use crate::crawler::{self, Robots};
 use crate::{Config, Event, EventSink};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
+use url::Url;
 
-const WIKI: &str = "https://ko.wikipedia.org";
 const USER_AGENT: &str = concat!(
     "ArcanaAssistant/",
     env!("CARGO_PKG_VERSION"),
@@ -31,6 +32,20 @@ const USER_AGENT: &str = concat!(
 const FRONTIER_MAX: usize = 5000;
 const QUESTIONS_MAX: usize = 50;
 const DAILY_LIMIT: usize = 3000;
+const MAX_HTML: u64 = 2 * 1024 * 1024;
+
+/// 다른 언어 위키·일반 웹사이트 첫 시작점 (v0.5부터)
+const SEEDS_WORLD: &[&str] = &[
+    "wiki:en:Science",
+    "wiki:en:History",
+    "wiki:en:Computer science",
+    "wiki:en:Music",
+    "wiki:en:Space exploration",
+    "wiki:en:Video game",
+    "wiki:ja:科学",
+    "wiki:ja:日本",
+    "wiki:ja:コンピュータ",
+];
 
 /// 처음 공부를 시작할 문서들
 const SEEDS: &[&str] = &[
@@ -130,8 +145,117 @@ struct Taught {
     bot: String,
 }
 
+/// 탐색 설정 (config.json 에서 옴)
+#[derive(Clone)]
+pub struct CrawlSettings {
+    pub wiki_langs: Vec<String>,
+    pub explore_web: bool,
+    pub blocked_domains: Vec<String>,
+    pub site_delay_secs: u64,
+    pub site_daily_limit: usize,
+}
+
+impl CrawlSettings {
+    pub fn from(c: &Config) -> Self {
+        Self {
+            wiki_langs: c.wiki_langs.clone(),
+            explore_web: c.explore_web,
+            blocked_domains: c.blocked_domains.clone(),
+            site_delay_secs: c.site_delay_secs.max(3),
+            site_daily_limit: c.site_daily_limit.max(1),
+        }
+    }
+}
+
+/// 다음에 읽을 곳: "블랙홀"(한국어 위키) / "wiki:en:Black hole" / "https://..."
+enum Target {
+    Wiki(String, String),
+    Web(String),
+}
+
+fn target(s: &str) -> Target {
+    if s.starts_with("http://") || s.starts_with("https://") {
+        return Target::Web(s.into());
+    }
+    if let Some(rest) = s.strip_prefix("wiki:") {
+        if let Some((lang, title)) = rest.split_once(':') {
+            return Target::Wiki(lang.into(), title.into());
+        }
+    }
+    Target::Wiki("ko".into(), s.into())
+}
+
+fn wiki_key(lang: &str, title: &str) -> String {
+    if lang == "ko" {
+        title.to_string()
+    } else {
+        format!("wiki:{lang}:{title}")
+    }
+}
+
+enum Step {
+    Learned(String, String),
+    Skip,
+    Later,
+}
+
+/// 탐색 한 걸음 결과
+pub enum Studied {
+    Learned {
+        title: String,
+        site: String,
+    },
+    /// 사이트 간격 때문에 잠깐 기다려야 함
+    Wait,
+    /// 읽을 게 없거나 오늘 한도
+    Idle,
+}
+
+/// 채팅에서 읽은 웹페이지
+#[derive(Debug, Clone)]
+pub struct WebPage {
+    pub title: String,
+    pub summary: String,
+    pub headings: Vec<String>,
+    /// (주소, 링크 글자)
+    pub links: Vec<(String, String)>,
+    pub url: String,
+    pub site: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct SearchHit {
+    pub title: String,
+    pub snippet: String,
+    pub url: String,
+    /// 어디서 찾았는지 (위키백과, DuckDuckGo, Brave Search)
+    pub source: String,
+}
+
+/// "<span class=searchmatch>블랙홀</span>은" → "블랙홀은"
+fn strip_tags(s: &str) -> String {
+    let mut out = String::new();
+    let mut in_tag = false;
+    for c in s.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => out.push(c),
+            _ => {}
+        }
+    }
+    out.replace("&quot;", "\"")
+        .replace("&amp;", "&")
+        .replace("&#39;", "'")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+}
+
 pub struct Knowledge {
     dir: PathBuf,
+    robots: Mutex<HashMap<String, Robots>>,
+    site_last: Mutex<HashMap<String, Instant>>,
+    site_today: Mutex<(String, HashMap<String, usize>)>,
     docs: RwLock<Vec<Doc>>,
     index: RwLock<HashMap<String, usize>>,
     frontier: Mutex<Frontier>,
@@ -253,7 +377,19 @@ impl Knowledge {
             .timeout_read(Duration::from_secs(15))
             .user_agent(USER_AGENT)
             .build();
+        // v0.5: 다른 언어 위키·웹 시작점 한 번 추가
+        if !dir.join("seeded_world").exists() {
+            for s in SEEDS_WORLD {
+                if seen.insert(s.to_string()) {
+                    frontier.queue.push_back(s.to_string());
+                }
+            }
+            let _ = std::fs::write(dir.join("seeded_world"), "1");
+        }
         Arc::new(Self {
+            robots: Mutex::new(HashMap::new()),
+            site_last: Mutex::new(HashMap::new()),
+            site_today: Mutex::new((String::new(), HashMap::new())),
             dir,
             docs: RwLock::new(docs),
             index: RwLock::new(index),
@@ -329,7 +465,7 @@ impl Knowledge {
         doc
     }
 
-    // ───────────── 위키백과 ─────────────
+    // ───────────── 위키백과 (여러 언어) ─────────────
 
     fn get_json(&self, url: &str) -> Result<serde_json::Value, String> {
         match self.agent.get(url).call() {
@@ -342,9 +478,18 @@ impl Knowledge {
         }
     }
 
-    fn summary(&self, title: &str) -> Result<Option<(String, String, String, String)>, String> {
+    fn wiki(lang: &str) -> String {
+        format!("https://{lang}.wikipedia.org")
+    }
+
+    fn summary(
+        &self,
+        lang: &str,
+        title: &str,
+    ) -> Result<Option<(String, String, String, String)>, String> {
         let url = format!(
-            "{WIKI}/api/rest_v1/page/summary/{}",
+            "{}/api/rest_v1/page/summary/{}",
+            Self::wiki(lang),
             urlencoding::encode(&title.replace(' ', "_"))
         );
         let v = self.get_json(&url)?;
@@ -363,9 +508,10 @@ impl Knowledge {
         )))
     }
 
-    fn search_title(&self, q: &str) -> Result<Option<String>, String> {
+    fn search_title(&self, lang: &str, q: &str) -> Result<Option<String>, String> {
         let url = format!(
-            "{WIKI}/w/api.php?action=query&list=search&srlimit=1&format=json&srsearch={}",
+            "{}/w/api.php?action=query&list=search&srlimit=1&format=json&srsearch={}",
+            Self::wiki(lang),
             urlencoding::encode(q)
         );
         Ok(self.get_json(&url)?["query"]["search"][0]["title"]
@@ -373,9 +519,16 @@ impl Knowledge {
             .map(String::from))
     }
 
-    fn links(&self, title: &str) -> Vec<String> {
+    /// 문서 안의 위키 링크(prop=links) 또는 바깥 링크(prop=extlinks)
+    fn wiki_links(&self, lang: &str, title: &str, external: bool) -> Vec<String> {
+        let (prop, field, extra) = if external {
+            ("extlinks", "extlinks", "&ellimit=30")
+        } else {
+            ("links", "links", "&plnamespace=0&pllimit=60")
+        };
         let url = format!(
-            "{WIKI}/w/api.php?action=query&prop=links&plnamespace=0&pllimit=60&format=json&titles={}",
+            "{}/w/api.php?action=query&prop={prop}{extra}&format=json&titles={}",
+            Self::wiki(lang),
             urlencoding::encode(title)
         );
         let Ok(v) = self.get_json(&url) else {
@@ -384,8 +537,13 @@ impl Knowledge {
         let mut out = Vec::new();
         if let Some(pages) = v["query"]["pages"].as_object() {
             for p in pages.values() {
-                for l in p["links"].as_array().into_iter().flatten() {
-                    if let Some(t) = l["title"].as_str() {
+                for l in p[field].as_array().into_iter().flatten() {
+                    // 위키 링크는 "title", 바깥 링크는 "*" 또는 "url"
+                    if let Some(t) = l["title"]
+                        .as_str()
+                        .or(l["*"].as_str())
+                        .or(l["url"].as_str())
+                    {
                         out.push(t.to_string());
                     }
                 }
@@ -394,19 +552,49 @@ impl Knowledge {
         out
     }
 
-    fn enqueue_links(&self, title: &str) {
-        let links = self.links(title);
+    fn push_targets(&self, items: impl IntoIterator<Item = String>) {
         let mut seen = self.seen.lock().unwrap();
         let mut f = self.frontier.lock().unwrap();
-        let step = (links.len() / 12).max(1);
-        for t in links.into_iter().step_by(step).take(12) {
-            if worth_studying(&t) && f.queue.len() < FRONTIER_MAX && seen.insert(t.clone()) {
+        for t in items {
+            if f.queue.len() < FRONTIER_MAX && seen.insert(t.clone()) {
                 f.queue.push_back(t);
             }
         }
         drop(f);
         drop(seen);
         self.save_frontier();
+    }
+
+    fn enqueue_wiki_links(&self, lang: &str, title: &str, explore_web: bool, blocked: &[String]) {
+        let links = self.wiki_links(lang, title, false);
+        let step = (links.len() / 10).max(1);
+        let mut items: Vec<String> = links
+            .into_iter()
+            .step_by(step)
+            .take(10)
+            .filter(|t| worth_studying(t))
+            .map(|t| wiki_key(lang, &t))
+            .collect();
+        if explore_web {
+            // 위키 문서의 출처·바깥 링크 → 일반 웹으로 넘어가는 다리
+            let ext: Vec<String> = self
+                .wiki_links(lang, title, true)
+                .into_iter()
+                .filter_map(|u| {
+                    Url::parse(&if u.starts_with("//") {
+                        format!("https:{u}")
+                    } else {
+                        u
+                    })
+                    .ok()
+                })
+                .filter(|u| crawler::url_ok(u, blocked))
+                .map(|u| crawler::canonical(&u))
+                .take(3)
+                .collect();
+            items.extend(ext);
+        }
+        self.push_targets(items);
     }
 
     fn save_frontier(&self) {
@@ -417,12 +605,17 @@ impl Knowledge {
         );
     }
 
-    /// 위키백과에서 배워오기
-    pub fn learn(&self, topic: &str, source: &str) -> Result<Learned, String> {
-        let mut found = self.summary(topic)?;
+    fn learn_wiki(
+        &self,
+        lang: &str,
+        topic: &str,
+        source: &str,
+        s: Option<&CrawlSettings>,
+    ) -> Result<Learned, String> {
+        let mut found = self.summary(lang, topic)?;
         if found.is_none() {
-            if let Some(t) = self.search_title(topic)? {
-                found = self.summary(&t)?;
+            if let Some(t) = self.search_title(lang, topic)? {
+                found = self.summary(lang, &t)?;
             }
         }
         let Some((title, extract, url, kind)) = found else {
@@ -430,7 +623,7 @@ impl Knowledge {
         };
         if kind == "disambiguation" {
             let options: Vec<String> = self
-                .links(&title)
+                .wiki_links(lang, &title, false)
                 .into_iter()
                 .filter(|t| worth_studying(t))
                 .take(6)
@@ -444,8 +637,326 @@ impl Knowledge {
             source: source.into(),
             learned_at: now(),
         });
-        self.enqueue_links(&title);
+        let (web, blocked) = s.map_or((false, vec![]), |s| {
+            (s.explore_web, s.blocked_domains.clone())
+        });
+        self.enqueue_wiki_links(lang, &title, web, &blocked);
         Ok(Learned::Doc(doc))
+    }
+
+    /// 물어본 걸 배워오기: 한국어 위키 → 없으면 다른 언어 위키 순서로
+    pub fn learn(&self, topic: &str, source: &str) -> Result<Learned, String> {
+        let r = self.learn_wiki("ko", topic, source, None)?;
+        if !matches!(r, Learned::NotFound) {
+            return Ok(r);
+        }
+        for lang in ["en", "ja"] {
+            if let Ok(Learned::Doc(d)) = self.learn_wiki(lang, topic, source, None) {
+                return Ok(Learned::Doc(d));
+            }
+        }
+        Ok(Learned::NotFound)
+    }
+
+    // ───────────── 일반 웹 ─────────────
+
+    /// 사이트 구분용 (포트 포함: a.com, a.com:8080)
+    fn host_of(u: &Url) -> String {
+        let h = u.host_str().unwrap_or("").to_lowercase();
+        match u.port() {
+            Some(p) => format!("{h}:{p}"),
+            None => h,
+        }
+    }
+
+    fn robots_for(&self, u: &Url) -> Robots {
+        let host = Self::host_of(u);
+        if let Some(r) = self.robots.lock().unwrap().get(&host) {
+            return r.clone();
+        }
+        let Ok(url) = u.join("/robots.txt") else {
+            return Robots::deny_all();
+        };
+        let r = match self.agent.get(url.as_str()).call() {
+            Ok(resp) => {
+                let mut txt = String::new();
+                let _ = std::io::Read::read_to_string(
+                    &mut std::io::Read::take(resp.into_reader(), 512 * 1024),
+                    &mut txt,
+                );
+                Robots::parse(&txt, USER_AGENT)
+            }
+            Err(ureq::Error::Status(401 | 403, _)) => Robots::deny_all(),
+            Err(ureq::Error::Status(_, _)) => Robots::allow_all(), // 404 등: 규칙 없음
+            Err(_) => Robots::deny_all(),                          // 연결 실패: 이번엔 건너뜀
+        };
+        self.robots.lock().unwrap().insert(host, r.clone());
+        r
+    }
+
+    fn crawl(&self, raw: &str, s: &CrawlSettings) -> Result<Step, String> {
+        let Ok(u) = Url::parse(raw) else {
+            return Ok(Step::Skip);
+        };
+        if !crawler::url_ok(&u, &s.blocked_domains) {
+            return Ok(Step::Skip);
+        }
+        let host = Self::host_of(&u);
+        // 하루 사이트당 한도
+        {
+            let mut t = self.site_today.lock().unwrap();
+            let d = chrono::Local::now().format("%Y-%m-%d").to_string();
+            if t.0 != d {
+                *t = (d, HashMap::new());
+            }
+            if *t.1.get(&host).unwrap_or(&0) >= s.site_daily_limit {
+                return Ok(Step::Skip);
+            }
+        }
+        let robots = self.robots_for(&u);
+        let path = match u.query() {
+            Some(q) => format!("{}?{q}", u.path()),
+            None => u.path().to_string(),
+        };
+        if !robots.allowed(&path) {
+            return Ok(Step::Skip);
+        }
+        // 같은 사이트 간격
+        let delay = Duration::from_secs(
+            robots
+                .crawl_delay
+                .unwrap_or(0)
+                .max(s.site_delay_secs)
+                .min(120),
+        );
+        if let Some(last) = self.site_last.lock().unwrap().get(&host) {
+            if last.elapsed() < delay {
+                return Ok(Step::Later);
+            }
+        }
+        self.site_last
+            .lock()
+            .unwrap()
+            .insert(host.clone(), Instant::now());
+        *self
+            .site_today
+            .lock()
+            .unwrap()
+            .1
+            .entry(host.clone())
+            .or_insert(0) += 1;
+
+        let resp = match self.agent.get(u.as_str()).call() {
+            Ok(r) => r,
+            Err(ureq::Error::Status(_, _)) => return Ok(Step::Skip),
+            Err(_) => return Err("인터넷에 연결할 수 없습니다. 연결을 확인해 주십시오.".into()),
+        };
+        if !resp.content_type().contains("html") {
+            return Ok(Step::Skip);
+        }
+        let final_url = Url::parse(resp.get_url()).unwrap_or(u);
+        let mut html = String::new();
+        if std::io::Read::read_to_string(
+            &mut std::io::Read::take(resp.into_reader(), MAX_HTML),
+            &mut html,
+        )
+        .is_err()
+        {
+            return Ok(Step::Skip);
+        }
+        let page = crawler::parse_html(&html, &final_url);
+
+        // 링크: 같은 사이트 3개 + 다른 사이트 5개 (한쪽으로 안 쏠리게)
+        if !page.nofollow {
+            let (mut same, mut other) = (0, 0);
+            let mut items = Vec::new();
+            for l in page
+                .links
+                .iter()
+                .filter(|l| crawler::url_ok(l, &s.blocked_domains))
+            {
+                let is_same = Self::host_of(l) == host;
+                if (is_same && same < 3) || (!is_same && other < 5) {
+                    if is_same {
+                        same += 1
+                    } else {
+                        other += 1
+                    }
+                    items.push(crawler::canonical(l));
+                }
+            }
+            self.push_targets(items);
+        }
+        let generic = ["home", "홈", "index", "welcome", "main page", "untitled"];
+        if page.noindex
+            || page.title.chars().count() < 2
+            || generic.contains(&page.title.to_lowercase().as_str())
+            || page.summary.chars().count() < 20
+            || !crawler::content_ok(&page.title, &page.summary)
+        {
+            return Ok(Step::Skip);
+        }
+        if self
+            .index
+            .read()
+            .unwrap()
+            .contains_key(&normalize(&page.title))
+        {
+            return Ok(Step::Skip); // 이미 아는 페이지 (주소만 다른 같은 페이지 등)
+        }
+        let doc = self.add(Doc {
+            title: page.title,
+            summary: page.summary,
+            url: crawler::canonical(&final_url),
+            source: "웹".into(),
+            learned_at: now(),
+        });
+        Ok(Step::Learned(doc.title, host))
+    }
+
+    // ───────────── 채팅에서 웹 탐색 (사용자가 요청한 것) ─────────────
+
+    /// 사용자가 준 주소 읽기. 사용자가 직접 요청한 거라 robots.txt 대신 차단 목록·내용 필터만 적용
+    pub fn read_page(&self, raw: &str, blocked: &[String]) -> Result<WebPage, String> {
+        let raw = if raw.starts_with("http") {
+            raw.to_string()
+        } else {
+            format!("https://{raw}")
+        };
+        let u = Url::parse(&raw).map_err(|_| "주소 형식이 올바르지 않습니다.".to_string())?;
+        if !crawler::url_ok(&u, blocked) {
+            return Err("안전하지 않거나 차단된 주소라서 열지 않겠습니다.".into());
+        }
+        let resp = match self.agent.get(u.as_str()).call() {
+            Ok(r) => r,
+            Err(ureq::Error::Status(code, _)) => {
+                return Err(format!("페이지를 열 수 없습니다. (응답 코드 {code})"))
+            }
+            Err(_) => return Err("인터넷에 연결할 수 없거나 사이트가 응답하지 않습니다.".into()),
+        };
+        if !resp.content_type().contains("html") {
+            return Err(format!(
+                "웹페이지가 아닌 파일입니다. ({})",
+                resp.content_type()
+            ));
+        }
+        let final_url = Url::parse(resp.get_url()).unwrap_or(u);
+        let mut html = String::new();
+        std::io::Read::read_to_string(
+            &mut std::io::Read::take(resp.into_reader(), MAX_HTML),
+            &mut html,
+        )
+        .map_err(|_| "페이지를 읽지 못했습니다.".to_string())?;
+        let page = crawler::parse_html(&html, &final_url);
+        if !crawler::content_ok(&page.title, &page.summary) {
+            return Err("부적절한 내용이 있는 페이지라서 보여 드리지 않겠습니다.".into());
+        }
+        let mut links = Vec::new();
+        for (l, t) in page.links.iter().zip(&page.link_texts) {
+            if t.chars().count() >= 2
+                && crawler::url_ok(l, blocked)
+                && !links.iter().any(|(_, x): &(String, String)| x == t)
+            {
+                links.push((crawler::canonical(l), t.chars().take(40).collect()));
+            }
+            if links.len() >= 6 {
+                break;
+            }
+        }
+        let url = crawler::canonical(&final_url);
+        if page.title.chars().count() >= 2 && page.summary.chars().count() >= 20 && !page.noindex {
+            self.add(Doc {
+                title: page.title.clone(),
+                summary: page.summary.clone(),
+                url: url.clone(),
+                source: "웹".into(),
+                learned_at: now(),
+            });
+        }
+        Ok(WebPage {
+            title: page.title,
+            summary: page.summary,
+            headings: page.headings,
+            links,
+            url,
+            site: Self::host_of(&final_url),
+        })
+    }
+
+    /// 채팅 검색. Brave API 키가 있으면 일반 웹, 없으면 위키백과(한·영) + DuckDuckGo 요약
+    pub fn search(&self, q: &str, brave_key: &str) -> Result<Vec<SearchHit>, String> {
+        let mut hits = Vec::new();
+        if !brave_key.trim().is_empty() {
+            let url = format!(
+                "https://api.search.brave.com/res/v1/web/search?count=5&q={}",
+                urlencoding::encode(q)
+            );
+            let v: serde_json::Value = self
+                .agent
+                .get(&url)
+                .set("Accept", "application/json")
+                .set("X-Subscription-Token", brave_key.trim())
+                .call()
+                .map_err(|e| format!("Brave 검색 실패: {e}"))?
+                .into_json()
+                .map_err(|e| e.to_string())?;
+            for r in v["web"]["results"].as_array().into_iter().flatten().take(5) {
+                hits.push(SearchHit {
+                    title: strip_tags(r["title"].as_str().unwrap_or("")),
+                    snippet: strip_tags(r["description"].as_str().unwrap_or("")),
+                    url: r["url"].as_str().unwrap_or("").into(),
+                    source: "Brave Search".into(),
+                });
+            }
+            return Ok(hits);
+        }
+        // DuckDuckGo 공식 요약 API (키 필요 없음)
+        let ddg = format!(
+            "https://api.duckduckgo.com/?format=json&no_html=1&skip_disambig=1&q={}",
+            urlencoding::encode(q)
+        );
+        if let Ok(v) = self.get_json(&ddg) {
+            let abs = v["AbstractText"].as_str().unwrap_or("");
+            if !abs.is_empty() {
+                hits.push(SearchHit {
+                    title: v["Heading"].as_str().unwrap_or(q).into(),
+                    snippet: shorten(abs, 300),
+                    url: v["AbstractURL"].as_str().unwrap_or("").into(),
+                    source: format!(
+                        "DuckDuckGo · {}",
+                        v["AbstractSource"].as_str().unwrap_or("")
+                    ),
+                });
+            }
+        }
+        for lang in ["ko", "en"] {
+            let url = format!(
+                "{}/w/api.php?action=query&list=search&srlimit=3&format=json&srsearch={}",
+                Self::wiki(lang),
+                urlencoding::encode(q)
+            );
+            let v = self.get_json(&url)?;
+            for r in v["query"]["search"].as_array().into_iter().flatten() {
+                let title = r["title"].as_str().unwrap_or("").to_string();
+                if hits.iter().any(|h: &SearchHit| h.title == title) {
+                    continue;
+                }
+                hits.push(SearchHit {
+                    url: format!(
+                        "{}/wiki/{}",
+                        Self::wiki(lang),
+                        urlencoding::encode(&title.replace(' ', "_"))
+                    ),
+                    snippet: strip_tags(r["snippet"].as_str().unwrap_or("")),
+                    title,
+                    source: format!("위키백과 ({lang})"),
+                });
+            }
+            if hits.len() >= 4 {
+                break;
+            }
+        }
+        Ok(hits)
     }
 
     // ───────────── 질문 ─────────────
@@ -628,8 +1139,8 @@ impl Knowledge {
 
     // ───────────── 스스로 공부 ─────────────
 
-    /// 한 걸음: 대기열에서 하나 꺼내 공부. 공부한 제목을 돌려줌 (없으면 None)
-    pub fn study_step(&self) -> Result<Option<String>, String> {
+    /// 한 걸음: 대기열에서 하나 꺼내 공부
+    pub fn study_step(&self, s: &CrawlSettings) -> Result<Studied, String> {
         {
             let mut t = self.today.lock().unwrap();
             let d = chrono::Local::now().format("%Y-%m-%d").to_string();
@@ -637,38 +1148,63 @@ impl Knowledge {
                 *t = (d, 0);
             }
             if t.1 >= DAILY_LIMIT {
-                return Ok(None);
+                return Ok(Studied::Idle);
             }
-            t.1 += 1;
         }
-        loop {
-            let next = {
-                let mut f = self.frontier.lock().unwrap();
-                loop {
-                    match f.queue.pop_front() {
-                        Some(t) if self.index.read().unwrap().contains_key(&normalize(&t)) => {
-                            continue
-                        }
-                        other => break other,
+        let mut postponed = 0;
+        for _ in 0..40 {
+            let Some(item) = self.frontier.lock().unwrap().queue.pop_front() else {
+                return Ok(if postponed > 0 {
+                    Studied::Wait
+                } else {
+                    Studied::Idle
+                });
+            };
+            let step = match target(&item) {
+                Target::Wiki(lang, title) => {
+                    if !s.wiki_langs.iter().any(|l| *l == lang)
+                        || self.index.read().unwrap().contains_key(&normalize(&title))
+                    {
+                        continue;
                     }
+                    match self.learn_wiki(&lang, &title, "탐색", Some(s)) {
+                        Ok(Learned::Doc(d)) => {
+                            Ok(Step::Learned(d.title, format!("{lang}.wikipedia.org")))
+                        }
+                        Ok(Learned::Ambiguous { title, options }) => {
+                            if lang == "ko" && !options.is_empty() {
+                                self.ask(Question::Choose { title, options });
+                            }
+                            Ok(Step::Skip)
+                        }
+                        Ok(Learned::NotFound) => Ok(Step::Skip),
+                        Err(e) => Err(e),
+                    }
+                }
+                Target::Web(url) => {
+                    if !s.explore_web {
+                        continue;
+                    }
+                    self.crawl(&url, s)
                 }
             };
-            let Some(title) = next else { return Ok(None) };
-            match self.learn(&title, "탐색") {
-                Ok(Learned::Doc(d)) => return Ok(Some(d.title)),
-                Ok(Learned::Ambiguous { title, options }) => {
-                    if !options.is_empty() {
-                        self.ask(Question::Choose { title, options });
-                    }
-                    // 다음 문서로 계속
+            match step {
+                Ok(Step::Learned(title, site)) => {
+                    self.today.lock().unwrap().1 += 1;
+                    return Ok(Studied::Learned { title, site });
                 }
-                Ok(Learned::NotFound) => {}
+                Ok(Step::Skip) => {}
+                Ok(Step::Later) => {
+                    postponed += 1;
+                    self.frontier.lock().unwrap().queue.push_back(item);
+                }
                 Err(e) => {
-                    self.frontier.lock().unwrap().queue.push_front(title);
+                    self.frontier.lock().unwrap().queue.push_front(item);
                     return Err(e);
                 }
             }
         }
+        Ok(Studied::Wait)
     }
 
     /// 백그라운드 스레드. 설정의 self_study 가 켜져 있을 때만 공부함 (/Start, /Stop)
@@ -678,27 +1214,32 @@ impl Knowledge {
             std::thread::sleep(Duration::from_secs(3));
             let mut last_q: Option<Question> = None;
             loop {
-                let (on, interval) = {
+                let (on, interval, settings) = {
                     let c = config.read().unwrap();
-                    (c.self_study, c.study_interval_secs.max(5))
+                    (
+                        c.self_study,
+                        c.study_interval_secs.max(5),
+                        CrawlSettings::from(&c),
+                    )
                 };
                 if !on {
                     std::thread::sleep(Duration::from_secs(2));
                     continue;
                 }
-                let wait = match me.study_step() {
-                    Ok(Some(title)) => {
+                let wait = match me.study_step(&settings) {
+                    Ok(Studied::Learned { title, site }) => {
                         events(Event::Learned {
                             title,
+                            site,
                             count: me.stats().count,
                         });
                         interval
                     }
-                    Ok(None) => {
+                    Ok(Studied::Wait) => 3,
+                    Ok(Studied::Idle) => {
                         events(Event::StudyLog {
-                            text:
-                                "읽을 문서가 없거나 오늘 공부량을 다 채웠습니다. 잠시 쉬겠습니다."
-                                    .into(),
+                            text: "읽을 곳이 없거나 오늘 공부량을 다 채웠습니다. 잠시 쉬겠습니다."
+                                .into(),
                         });
                         600
                     }
@@ -709,7 +1250,6 @@ impl Knowledge {
                         300
                     }
                 };
-                // 새 질문이 생겼으면 알림
                 let q = me.current_question();
                 if q.is_some() && q != last_q {
                     events(Event::Question {
@@ -717,7 +1257,6 @@ impl Knowledge {
                     });
                 }
                 last_q = q;
-                // /Stop 하면 바로 멈추게 1초씩 쪼개서 대기
                 for _ in 0..wait {
                     if !config.read().unwrap().self_study {
                         break;
@@ -756,7 +1295,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("arcana-kn-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let k = Knowledge::open(dir.clone());
-        assert_eq!(k.stats().queued, SEEDS.len());
+        assert_eq!(k.stats().queued, SEEDS.len() + SEEDS_WORLD.len());
 
         k.add(Doc {
             title: "상대성 이론".into(),

@@ -19,8 +19,20 @@ pub struct Config {
     pub show_debug: bool,
     /// 스스로 공부 중인지 (학습 탭의 /Start, /Stop). 켜두면 앱 다시 켜도 이어서 공부
     pub self_study: bool,
-    /// 자율 탐색 간격 (초). 너무 짧으면 위키백과 서버에 부담
+    /// 자율 탐색 간격 (초). 너무 짧으면 상대 서버에 부담
     pub study_interval_secs: u64,
+    /// 공부할 위키백과 언어들 (ko=한국어, en=영어, ja=일본어 ...)
+    pub wiki_langs: Vec<String>,
+    /// 위키백과 말고 일반 웹사이트도 돌아다닐지
+    pub explore_web: bool,
+    /// 절대 안 갈 사이트 (예: "example.com" → 하위 주소 전부 차단)
+    pub blocked_domains: Vec<String>,
+    /// 같은 사이트 최소 간격 (초). 사이트 robots.txt 의 Crawl-delay 가 더 길면 그걸 따름
+    pub site_delay_secs: u64,
+    /// 하루에 한 사이트에서 읽을 최대 페이지 수
+    pub site_daily_limit: usize,
+    /// (선택) Brave Search API 키 — 넣으면 채팅 검색이 일반 웹 전체에서 됨. 없으면 위키백과 + DuckDuckGo 요약
+    pub brave_api_key: String,
     pub apps: BTreeMap<String, AppEntry>,
 }
 
@@ -136,6 +148,12 @@ impl Default for Config {
             show_debug: false,
             self_study: false,
             study_interval_secs: 20,
+            wiki_langs: vec!["ko".into(), "en".into(), "ja".into()],
+            explore_web: true,
+            blocked_domains: vec![],
+            site_delay_secs: 10,
+            site_daily_limit: 100,
+            brave_api_key: String::new(),
             apps,
         }
     }
