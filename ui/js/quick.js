@@ -40,8 +40,17 @@ class Tween {
 class Kick {
   constructor() { this.amp = 0; this.start = 0; this.dur = 1; }
   fire(amp, dur, now = performance.now()) { this.amp = Math.max(amp, this.value(now)); this.start = now; this.dur = dur; }
-  value(now) { return this.amp * (1 - outExpo(clamp01((now - this.start) / this.dur))); }
+  value(now) {
+    const p = clamp01((now - this.start) / this.dur);
+    return p >= 1 ? 0 : this.amp * (Math.pow(2, -6 * p) - Math.pow(2, -6)) / (1 - Math.pow(2, -6)); // Expo 감쇠
+  }
 }
+
+// 속도 (평소 = 1배). 눈에 확 보이도록 크게 잡음
+const DARK_SPEED = 0.22;  // 검정 쪽: 확실히 느리게
+const SWITCH_KICK = 5;    // 빛나는 쪽으로 바뀔 때: 순간 6배까지 빨라졌다가 Expo 로 돌아옴
+const OPEN_KICK = 10;     // 나올 때: 순간 11배까지
+const CLOSE_SPEED = 22;   // 사라질 때: 끝에 22배까지 빨라짐
 
 class Wave {
   constructor(canvas, side, palette) {
@@ -51,17 +60,17 @@ class Wave {
     this.pal = palette.map(hex);
     this.lit = new Tween(0);     // 1 = 빛남(원래 색·위치), 0 = 연한 검정 + 가장자리로 내려감
     this.grow = new Tween(0);    // 0 = 숨김, 1 = 다 펼쳐짐 (나오기·사라지기)
-    this.rest = new Tween(0.45); // 평소 물결 속도 (빛나면 1, 검정이면 느리게)
+    this.rest = new Tween(DARK_SPEED); // 평소 물결 속도 (빛나면 1, 검정이면 느리게)
     this.kick = new Kick();      // 순간 가속
     this.exit = new Tween(0);    // 사라질 때 Expo 로 빨라지는 정도
     this.clock = Math.random() * 100;
     this.layers = [
       // dark = 검정일 때 남는 진하기 (가장자리 쪽 얇은 층일수록 연하게 → 굵은 검은 띠가 안 생김)
-      { base: 0.62, amp: 0.10, freq: 1.1, speed: 0.42, phase: 0.0, alpha: 0.55, dark: 0.5 },
-      { base: 0.48, amp: 0.12, freq: 1.7, speed: -0.6, phase: 1.7, alpha: 0.55, dark: 0.42 },
-      { base: 0.36, amp: 0.09, freq: 2.4, speed: 0.78, phase: 3.1, alpha: 0.6, dark: 0.3 },
-      { base: 0.24, amp: 0.07, freq: 3.1, speed: -0.95, phase: 4.4, alpha: 0.7, dark: 0.18 },
-      { base: 0.13, amp: 0.05, freq: 4.2, speed: 1.15, phase: 0.9, alpha: 0.85, dark: 0.08 },
+      { base: 0.62, amp: 0.10, freq: 1.1, speed: 0.6, phase: 0.0, alpha: 0.55, dark: 0.5 },
+      { base: 0.48, amp: 0.12, freq: 1.7, speed: -0.85, phase: 1.7, alpha: 0.55, dark: 0.42 },
+      { base: 0.36, amp: 0.09, freq: 2.4, speed: 1.1, phase: 3.1, alpha: 0.6, dark: 0.3 },
+      { base: 0.24, amp: 0.07, freq: 3.1, speed: -1.3, phase: 4.4, alpha: 0.7, dark: 0.18 },
+      { base: 0.13, amp: 0.05, freq: 4.2, speed: 1.6, phase: 0.9, alpha: 0.85, dark: 0.08 },
     ];
   }
   resize() {
@@ -73,20 +82,20 @@ class Wave {
   setLit(on, now = performance.now()) {
     if ((this.lit.to === 1) === on) return;
     this.lit.set(on ? 1 : 0, 750, outExpo, now);
-    this.rest.set(on ? 1 : 0.45, 1100, outExpo, now);
-    if (on) this.kick.fire(1.8, 1300, now);
+    this.rest.set(on ? 1 : DARK_SPEED, 1400, outExpo, now);
+    if (on) this.kick.fire(SWITCH_KICK, 2000, now);
   }
   enter(lit, now) {
     this.exit.jump(0);
     this.lit.jump(lit ? 1 : 0);
-    this.rest.jump(lit ? 1 : 0.45);
+    this.rest.jump(lit ? 1 : DARK_SPEED);
     this.grow.jump(0);
     this.grow.set(1, 1100, outExpo, now);
-    this.kick.fire(lit ? 4.5 : 3, 1600, now); // 나올 때: 순간 빨라졌다가 Expo 로 원래 속도
+    this.kick.fire(OPEN_KICK * (lit ? 1 : 0.6), 2400, now); // 나올 때: 순간 빨라졌다가 Expo 로 원래 속도
   }
   leave(now) {
-    this.grow.set(0, 620, inExpo, now);   // 사라질 때: Expo 로 빨라지면서 사라짐
-    this.exit.set(7, 620, inExpo, now);
+    this.grow.set(0, 700, inExpo, now);   // 사라질 때: Expo 로 빨라지면서 사라짐
+    this.exit.set(CLOSE_SPEED, 700, inExpo, now);
   }
   color(i, a, m, dark) {
     const [r, g, b] = this.pal[i % this.pal.length];
@@ -141,6 +150,7 @@ class Wave {
 
 const top = new Wave($("#wave-top"), "top", TOP);
 const bottom = new Wave($("#wave-bottom"), "bottom", BOTTOM);
+window.__waves = { top, bottom }; // 디버그용
 let running = false;
 let closing = false;
 let lastFrame = 0;
