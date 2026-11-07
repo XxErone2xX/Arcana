@@ -303,6 +303,10 @@ pub struct Knowledge {
     site_today: Mutex<(String, HashMap<String, usize>)>,
     /// 사이트별 연속 실패 횟수 (3번이면 그날은 건너뜀)
     site_fail: Mutex<HashMap<String, usize>>,
+    /// 연달아 실패한 사이트를 잠깐 쉬게 하는 시각
+    site_pause: Mutex<HashMap<String, (Instant, u32)>>,
+    /// 최근 연달아 실패한 서로 다른 사이트들 (인터넷이 끊긴 건지 판단)
+    net_fail_hosts: Mutex<std::collections::HashSet<String>>,
     /// 사이트별 마지막 문제 ("접근 거부(봇 차단)" 등) — 한 사이트만 공부할 때 이유를 알려 주려고
     site_problem: Mutex<HashMap<String, String>>,
     /// "로딩 중" 페이지를 몇 번 다시 시도했는지
@@ -456,6 +460,8 @@ impl Knowledge {
             site_last: Mutex::new(HashMap::new()),
             site_today: Mutex::new((String::new(), HashMap::new())),
             site_fail: Mutex::new(HashMap::new()),
+            site_pause: Mutex::new(HashMap::new()),
+            net_fail_hosts: Mutex::new(std::collections::HashSet::new()),
             site_problem: Mutex::new(HashMap::new()),
             loading_tries: Mutex::new(HashMap::new()),
             refreshed: Mutex::new(HashMap::new()),
@@ -836,6 +842,7 @@ impl Knowledge {
         if let Ok(u) = url::Url::parse(url) {
             let h = Self::host_of(&u);
             self.site_fail.lock().unwrap().remove(&h);
+            self.site_pause.lock().unwrap().remove(&h);
             self.site_problem.lock().unwrap().remove(&h);
         }
         let is_wiki_site = site_of(url).as_deref() == Some("wikipedia.org");
@@ -989,8 +996,10 @@ impl Knowledge {
                 return Ok(Step::Skip);
             }
         }
-        if *self.site_fail.lock().unwrap().get(&host).unwrap_or(&0) >= 3 {
-            return Ok(Step::Skip); // 오늘 계속 실패한 사이트
+        // 연달아 실패한 사이트는 잠깐 쉬었다가 다시 (예전엔 3번 실패하면 그날 내내 포기 → 여러 일꾼이
+        // 동시에 읽을 때 한꺼번에 3번 실패하면 사이트를 통째로 버려서 공부가 멈춘 것처럼 보였음)
+        if self.site_pause.lock().unwrap().get(&host).map_or(false, |(t, _)| Instant::now() < *t) {
+            return Ok(Step::Later); // 이 주소는 버리지 않고 나중에
         }
         // 같은 사이트 간격 (robots.txt 를 안 지킬 땐 최소 1초 — 사이트에 부담을 주거나 차단당하지 않게)
         let delay = if s.obey_robots {
@@ -1029,7 +1038,9 @@ impl Knowledge {
         let resp = match net::get(u.as_str(), &[]) {
             Ok(r) => {
                 *self.net_fail_streak.lock().unwrap() = 0;
+                self.net_fail_hosts.lock().unwrap().clear();
                 self.site_fail.lock().unwrap().remove(&host);
+                self.site_pause.lock().unwrap().remove(&host);
                 r
             }
             Err(ureq::Error::Status(code, _)) => {
@@ -1049,17 +1060,43 @@ impl Knowledge {
             Err(e) => {
                 // 이 페이지·사이트만의 문제(리다이렉트 반복, 잘못된 응답, 꺼진 서버 등)는 건너뛰고 계속
                 self.note_problem(&host, net::describe(&e));
-                *self
-                    .site_fail
-                    .lock()
-                    .unwrap()
-                    .entry(host.clone())
-                    .or_insert(0) += 1;
+                let fails = {
+                    let mut f = self.site_fail.lock().unwrap();
+                    let n = f.entry(host.clone()).or_insert(0);
+                    *n += 1;
+                    *n
+                };
+                if fails >= 3 {
+                    // 3번 넘게 연달아 실패: 이 사이트만 잠깐 쉼 (20초 → 40초 → … 최대 10분), 성공하면 바로 풀림.
+                    // 동시에 여러 일꾼이 실패해도 한 번으로 침 (쉬는 중에 들어온 실패로는 더 늘리지 않음)
+                    let mut p = self.site_pause.lock().unwrap();
+                    let now = Instant::now();
+                    let level = match p.get(&host) {
+                        Some((until, lv)) if now < *until => None, // 이미 쉬는 중
+                        Some((_, lv)) => Some(lv + 1),
+                        None => Some(0),
+                    };
+                    if let Some(lv) = level {
+                        let secs = (20u64 << lv.min(5)).min(600);
+                        p.insert(host.clone(), (now + Duration::from_secs(secs), lv));
+                        self.site_fail.lock().unwrap().insert(host.clone(), 0);
+                    }
+                }
+                // 인터넷 자체가 끊긴 건지: 서로 다른 사이트 3곳 이상이 연달아 실패했을 때만
+                // (한 사이트만 읽을 때 그 사이트 실패를 인터넷 문제로 착각해 모든 일꾼이 몇 분씩 멈추던 문제)
                 let mut streak = self.net_fail_streak.lock().unwrap();
+                let mut hosts = self.net_fail_hosts.lock().unwrap();
                 *streak += 1;
-                if *streak >= 5 {
+                hosts.insert(host.clone());
+                if *streak >= 5 && hosts.len() >= 3 {
                     *streak = 0;
-                    return Err(net::describe(&e)); // 여러 사이트가 연속으로 실패 → 인터넷 문제
+                    hosts.clear();
+                    return Err(net::describe(&e));
+                }
+                // 실패한 주소는 버리지 않고 맨 뒤로 (한 번만 다시 시도)
+                let retry = format!("{raw}#retry");
+                if !raw.ends_with("#retry") {
+                    self.frontier.lock().unwrap().queue.push_back(retry);
                 }
                 return Ok(Step::Skip);
             }
