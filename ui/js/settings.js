@@ -1,5 +1,5 @@
 // 설정 창: 설정(일반·빠른 호출·메모리·컨테이너 메모리) / 모델(생각 수치) / 정보
-import { api } from "./api.js";
+import { api, ready } from "./api.js";
 
 const $ = (s) => document.querySelector(s);
 const sheet = $("#sheet");
@@ -49,8 +49,9 @@ function rows(el, list) {
 }
 
 async function render() {
+  // 아직 정보를 못 받았으면 받아 온 뒤에 그림 (기본값이 보이는 문제 방지)
+  if (!ctx.getInfo()) ctx.setInfo(await ready());
   const info = ctx.getInfo();
-  if (!info) return;
   $("#opt-debug").checked = info.show_debug;
   $("#opt-update").checked = info.auto_update;
   $("#opt-hotkey").checked = info.hotkey_enabled;

@@ -60,6 +60,7 @@ function mock() {
     async openUrl(url) { window.open(url, "_blank"); },
     async feedback(u, r, rating, better) { return rating > 0 ? "감사합니다. 이런 대답을 더 자주 하겠습니다." : better ? "알겠습니다. 다음부터는 알려 주신 대로 대답하겠습니다." : "죄송합니다. 그 대답은 피하겠습니다."; },
     async info() {
+      if (window.__fail > 0) { window.__fail--; throw new Error("아직 준비 중"); } // 시험용: 켜지는 중 흉내
       return window.__info ??= {
         name: "Arcana", app_name: "Arcana", version: "preview", brain: "mock", talker: "mock", show_debug: true, auto_update: true,
         data_dir: "-", missing_skills: [],
@@ -84,4 +85,21 @@ function mock() {
     onEvent(cb) { listeners.push(cb); window.__mockEvent = (e) => listeners.forEach((l) => l(e)); },
     window: { minimize() {}, close() { alert("닫기"); } },
   };
+}
+
+// 앱이 켜지는 동안(두뇌·대화 모델·공책을 불러오는 몇 초) Rust 쪽이 아직 준비가 안 됐을 수 있음.
+// 그때 부르면 실패하므로, 준비될 때까지 잠깐씩 기다리며 다시 시도함.
+let readyPromise = null;
+export function ready() {
+  readyPromise ??= (async () => {
+    for (let i = 0; ; i++) {
+      try {
+        return await api.info();
+      } catch (e) {
+        if (i > 600) throw e; // 약 1분
+        await new Promise((r) => setTimeout(r, 100));
+      }
+    }
+  })();
+  return readyPromise;
 }

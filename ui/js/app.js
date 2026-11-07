@@ -1,4 +1,4 @@
-import { api } from "./api.js";
+import { api, ready } from "./api.js";
 import { attachPalette, ICONS } from "./palette.js";
 import { textbox, typeOut, stickyScroll } from "./compose.js";
 import { initSettings, openSettings } from "./settings.js";
@@ -262,7 +262,7 @@ async function checkUpdate(manual) {
 
 // ───────────── 시작 ─────────────
 (async () => {
-  info = await api.info();
+  info = await ready(); // 앱이 다 켜질 때까지 기다림 (안 그러면 설정 화면이 기본값으로 보임)
   $("#version").textContent = "v" + info.version;
   document.title = info.app_name;
   $("#app-name").textContent = info.app_name;

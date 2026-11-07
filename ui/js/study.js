@@ -1,5 +1,5 @@
 // 학습 탭: /Start 하면 Arcana가 스스로 공부하고, 모르는 게 생기면 질문함
-import { api } from "./api.js";
+import { api, ready } from "./api.js";
 import { attachPalette, ICONS } from "./palette.js";
 import { textbox, stickyScroll } from "./compose.js";
 
@@ -71,7 +71,7 @@ function showQuestion(q) {
 }
 
 async function refresh() {
-  try { render(await api.studyStatus()); } catch {}
+  try { await ready(); render(await api.studyStatus()); } catch {}
 }
 
 // ───────────── 입력 ─────────────
