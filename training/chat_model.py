@@ -106,11 +106,12 @@ class ChatGPT(nn.Module):
     def reply(self, vocab, text, temperature=0.0, top_k=8, max_new=80):
         """temperature 0 = 항상 가장 확률 높은 글자 (테스트용)"""
         ids = [USER] + vocab.enc(text)[: self.config["max_len"] // 2] + [BOT]
+        dev = next(self.parameters()).device  # 그래픽카드에서 학습 중이어도 되게
         out = []
         for _ in range(max_new):
             if len(ids) >= self.config["max_len"]:
                 break
-            logits = self(torch.tensor([ids]))[0, -1]
+            logits = self(torch.tensor([ids], device=dev))[0, -1].float()
             if temperature <= 0:
                 nxt = int(logits.argmax())
             else:

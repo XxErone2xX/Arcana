@@ -353,10 +353,14 @@ def main():
 
     @torch.no_grad()
     def show(title):
+        # 보여주기만 하는 부분이라, 여기서 문제가 생겨도 학습한 모델은 꼭 저장되게
         model.eval()
         print(f"\n── {title} ──")
-        for t in TEST[:6]:
-            print(f"{t}  →  {model.reply(vocab, t, temperature=0.7)}")
+        try:
+            for t in TEST[:6]:
+                print(f"{t}  →  {model.reply(vocab, t, temperature=0.7)}")
+        except Exception as e:
+            print(f"(예시 대답을 보여주지 못했습니다: {e})")
         model.train()
 
     print("\n1단계: 공책 문서로 한국어 배우기")
