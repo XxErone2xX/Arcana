@@ -21,13 +21,14 @@ import json
 import os
 import random
 import re
+import hashlib
 import shutil
 import sys
 import time
 import torch
 import torch.nn.functional as F
 from chat_model import ChatGPT, CharVocab, PRESETS, USER, BOT, EOS, PAD
-from export import write_safetensors
+from export import read_safetensors, write_safetensors
 from train_feedback import default_dir, read_jsonl
 from train_chat import known_inputs
 
@@ -46,8 +47,75 @@ def korean_ratio(s):
     return sum("가" <= c <= "힣" for c in letters) / max(len(letters), 1)
 
 
+# ───────────── 재료 다듬기 ─────────────
+URL_RE = re.compile(r"https?://\S+|www\.\S+")
+REPEAT_RE = re.compile(r"(.)\1{4,}")            # ㅋㅋㅋㅋㅋㅋ → ㅋㅋㅋ
+SPACE_RE = re.compile(r"[ \t ​]+")
+# 위키백과 문서 끝부분 (여기부터는 목록·출처라 문장 공부에 안 좋음)
+TAIL_SECTIONS = {"같이 보기", "각주", "외부 링크", "참고 문헌", "참고 자료", "출처", "주석", "관련 항목", "더 읽어보기"}
+JUNK_WORDS = ("무단 전재", "무단전재", "copyright", "©", "all rights reserved", "로그인", "회원가입", "쿠키", "개인정보처리방침",
+              "이용약관", "구독하기", "공유하기", "좋아요", "댓글", "광고", "바로가기", "본문 바로가기", "기사제보")
+
+
+def clean_lines(text):
+    out = []
+    for line in text.split("\n"):
+        line = SPACE_RE.sub(" ", URL_RE.sub("", line)).strip()
+        line = REPEAT_RE.sub(lambda m: m.group(1) * 3, line)
+        if line.strip("= ") in TAIL_SECTIONS:
+            break
+        out.append(line)
+    return out
+
+
+def norm_key(s):
+    return re.sub(r"[^0-9a-z가-힣]", "", s.lower())
+
+
+def tidy_corpus(raw_texts):
+    """중복 문서 제거 · 여러 문서에 반복되는 줄(메뉴·저작권 문구) 제거 · 짧거나 깨진 줄 제거"""
+    stats = collections.Counter()
+    docs = [clean_lines(t) for t in raw_texts]
+    # 여러 문서(5개 이상)에 똑같이 나오는 줄 = 사이트 공통 문구
+    line_docs = collections.Counter()
+    for lines in docs:
+        for k in {norm_key(l) for l in lines if l}:
+            line_docs[k] += 1
+    boiler = {k for k, n in line_docs.items() if n >= 5 and len(k) < 200}
+    out, seen = [], set()
+    for lines in docs:
+        keep = []
+        for l in lines:
+            k = norm_key(l)
+            if not k:
+                continue
+            if k in boiler:
+                stats["반복 문구 줄"] += 1
+                continue
+            low = l.lower()
+            if len(l) < 6 or any(w in low for w in JUNK_WORDS) and len(l) < 80:
+                stats["짧거나 쓸모없는 줄"] += 1
+                continue
+            if korean_ratio(l) < 0.3 and not re.search(r"\d", l):
+                stats["한국어 아닌 줄"] += 1
+                continue
+            keep.append(l)
+        text = "\n".join(keep).strip()
+        if len(text) < 100:
+            stats["다듬고 나니 너무 짧음"] += 1
+            continue
+        k = norm_key(text)
+        key = (k[:300], k[-300:], len(k) // 200)  # 앞·뒤·길이가 같으면 같은 문서로 봄
+        if key in seen:
+            stats["중복 문서"] += 1
+            continue
+        seen.add(key)
+        out.append(text)
+    return out, stats
+
+
 def load_corpus(kdir, max_chars):
-    """1단계 재료: fulltext.jsonl(본문 전체) + 본문이 없는 문서는 docs.jsonl 요약"""
+    """1단계 재료: fulltext.jsonl(본문 전체) + 본문이 없는 문서는 docs.jsonl 요약 → 다듬기"""
     full = read_jsonl(os.path.join(kdir, "fulltext.jsonl"))
     docs = read_jsonl(os.path.join(kdir, "docs.jsonl"))
     texts, skipped, have = [], collections.Counter(), set()
@@ -65,12 +133,11 @@ def load_corpus(kdir, max_chars):
         if korean_ratio(text) < 0.5:
             skipped["한국어 아님"] += 1
             continue
-        if len(text) < 20:
-            skipped["너무 짧음"] += 1
-            continue
         if src == "사용자" and not text.startswith(d.get("title", "")):
             text = f"{d['title']}: {text}"  # 직접 가르쳐 준 뜻은 "단어: 뜻" 형태로
         texts.append(text)
+    texts, tidy = tidy_corpus(texts)
+    skipped.update(tidy)
     # 너무 많으면 최근 것 위주로 (메모리 보호)
     total, keep = 0, []
     for t in reversed(texts):
@@ -83,6 +150,52 @@ def load_corpus(kdir, max_chars):
     return keep, len(docs), skipped, len(full)
 
 
+def text_hash(t):
+    return hashlib.sha1(norm_key(t).encode("utf-8")).hexdigest()[:16]
+
+
+def load_previous(out, size):
+    """예전 모델이 같은 크기면 (글자 목록, 가중치, 배운 문서 기록)"""
+    meta_p, w_p = os.path.join(out, "arcana-chat.json"), os.path.join(out, "arcana-chat.safetensors")
+    if not (os.path.exists(meta_p) and os.path.exists(w_p)):
+        return None
+    try:
+        meta = json.load(open(meta_p, encoding="utf-8"))
+        cfg = dict(meta["config"])
+        cfg.pop("vocab_size", None)
+        want = {k: v for k, v in ChatGPT(10, **PRESETS[size]).config.items() if k != "vocab_size"}
+        if any(cfg.get(k) != v for k, v in want.items() if k != "dropout"):
+            return None
+        seen_p = os.path.join(out, "arcana-chat.seen")
+        seen = set(open(seen_p, encoding="utf-8").read().split()) if os.path.exists(seen_p) else set()
+        return meta["vocab"], read_safetensors(w_p), seen
+    except Exception as e:
+        print(f"예전 모델을 읽지 못해서 처음부터 학습합니다. ({e})")
+        return None
+
+
+def grow_into(model, old_state, n_old):
+    """예전 가중치를 새 모델에 넣기. 글자 수가 늘었으면 새 글자 줄만 새로 시작"""
+    new_state = model.state_dict()
+    for k, v in old_state.items():
+        if k not in new_state:
+            continue
+        tgt = new_state[k]
+        if tgt.shape == v.shape:
+            new_state[k] = v
+        elif k in ("tok_emb.weight", "lm_head.weight", "lm_head.bias") and v.shape[0] == n_old:
+            tgt[:n_old] = v
+            new_state[k] = tgt
+    model.load_state_dict(new_state)
+
+
+def clean_backups(out, keep=3):
+    """오래된 백업 지우기 (최근 keep 개만 남김)"""
+    bks = sorted(d for d in os.listdir(out) if d.startswith("backup-") and os.path.isdir(os.path.join(out, d)))
+    for d in bks[:-keep]:
+        shutil.rmtree(os.path.join(out, d), ignore_errors=True)
+
+
 def load_dialogue(kdir):
     pairs = []
     ddir = os.path.join(HERE, "data")
@@ -92,7 +205,18 @@ def load_dialogue(kdir):
                 pairs += [(r["user"], r["bot"]) for r in read_jsonl(os.path.join(ddir, f)) if r.get("user") and r.get("bot")]
     taught = [(t["user"], t["bot"]) for t in read_jsonl(os.path.join(kdir, "taught.jsonl"))]
     better = [(f["user"], f["better"]) for f in read_jsonl(os.path.join(kdir, "feedback.jsonl")) if f.get("better")]
-    return pairs, taught + better
+
+    def dedup(items):  # 같은 쌍은 한 번만, 앞뒤 공백 정리, 너무 긴 건 제외
+        seen, out = set(), []
+        for u, r in items:
+            u, r = u.strip(), r.strip()
+            k = (norm_key(u), norm_key(r))
+            if not k[0] or not k[1] or k in seen or len(r) > 400:
+                continue
+            seen.add(k)
+            out.append((u, r))
+        return out
+    return dedup(pairs), dedup(taught + better)
 
 
 def main():
@@ -101,6 +225,7 @@ def main():
     ap.add_argument("--size", choices=PRESETS)
     ap.add_argument("--pre-steps", type=int)
     ap.add_argument("--sft-steps", type=int)
+    ap.add_argument("--fresh", action="store_true", help="이어서 학습하지 않고 처음부터 새로 학습")
     ap.add_argument("--max-chars", type=int, default=60_000_000, help="1단계에 쓸 최대 글자 수 (메모리 보호)")
     ap.add_argument("--min-char", type=int, default=3, help="이보다 적게 나온 글자는 사전에서 뺌 (한자·특수문자 정리)")
     args = ap.parse_args()
@@ -134,22 +259,52 @@ def main():
     chars = {c for c, n in count.items() if n >= args.min_char}
     for u, r in dialog:
         chars.update(u.lower() + r)
-    vocab = CharVocab(chars)
-    model = ChatGPT(len(vocab.itos), **PRESETS[size]).to(device)
+    out = os.path.join(args.dir, "models")
+    prev = None if args.fresh else load_previous(out, size)
+    if prev:
+        # 이어서 학습: 예전 글자 번호는 그대로 두고 새 글자만 뒤에 붙임
+        old_itos, old_state, old_seen = prev
+        vocab = CharVocab.load(old_itos + sorted(chars - set(old_itos)))
+        model = ChatGPT(len(vocab.itos), **PRESETS[size])
+        grow_into(model, old_state, len(old_itos))
+        model.to(device)
+        seen = old_seen
+        new_texts = [t for t in corpus if text_hash(t) not in seen]
+        # 새로 배울 게 적으면 조금만, 많으면 많이 (처음부터보다는 훨씬 짧게)
+        frac = min(1.0, len(new_texts) / max(len(corpus), 1))
+        pre_steps = max(200, int(pre_steps * (0.15 + 0.35 * frac)))
+        sft_steps = max(200, int(sft_steps * 0.4))
+        lr_scale = 0.4
+        print(f"이어서 학습: 예전 모델에서 시작 · 새 문서 {len(new_texts):,}개 · 새 글자 {len(vocab.itos) - len(old_itos)}종")
+    else:
+        vocab = CharVocab(chars)
+        model = ChatGPT(len(vocab.itos), **PRESETS[size]).to(device)
+        seen, new_texts, lr_scale = set(), [], 1.0
+        print("처음부터 학습합니다." if args.fresh or not os.path.exists(os.path.join(out, "arcana-chat.json")) else "예전 모델과 크기가 달라서 처음부터 학습합니다.")
     L = model.config["max_len"]
     n_params = sum(p.numel() for p in model.parameters())
     print(f"모델 {size} · 파라미터 {n_params:,} · 글자 {len(vocab.itos)}종 · {device}" + (" (bf16)" if amp else ""))
 
     # 1단계용: 문서들을 이어 붙인 긴 글자 줄
-    stream = []
-    for t in corpus:
-        stream += vocab.enc(t, lower=False) + [EOS]
-    stream = torch.tensor(stream, dtype=torch.long)
+    def to_stream(texts):
+        ids = []
+        for t in texts:
+            ids += vocab.enc(t, lower=False) + [EOS]
+        return torch.tensor(ids, dtype=torch.long)
+
+    stream = to_stream(corpus)
+    # 이어서 학습할 때: 절반은 새 문서에서, 절반은 예전 문서 복습 (잊어버리지 않게)
+    new_stream = to_stream(new_texts) if sum(map(len, new_texts)) > L * 4 else None
 
     def lm_batch(n):
-        idx = torch.randint(0, len(stream) - L - 1, (n,))
-        x = torch.stack([stream[i:i + L] for i in idx])
-        y = torch.stack([stream[i + 1:i + L + 1] for i in idx])
+        def take(st, k):
+            idx = torch.randint(0, len(st) - L - 1, (k,))
+            return torch.stack([st[i:i + L] for i in idx]), torch.stack([st[i + 1:i + L + 1] for i in idx])
+        if new_stream is not None and n >= 2:
+            (x1, y1), (x2, y2) = take(new_stream, n // 2), take(stream, n - n // 2)
+            x, y = torch.cat([x1, x2]), torch.cat([y1, y2])
+        else:
+            x, y = take(stream, n)
         return x.to(device), y.to(device)
 
     def sft_batch(items):
@@ -196,7 +351,7 @@ def main():
         model.train()
 
     print("\n1단계: 공책 문서로 한국어 배우기")
-    run("사전학습", pre_steps, d["lr"], lambda: loss_of(*lm_batch(d["batch"])))
+    run("사전학습", pre_steps, d["lr"] * lr_scale, lambda: loss_of(*lm_batch(d["batch"])))
     model.eval()
     with torch.no_grad():  # 사전학습이 된 걸 확인: 문서 첫머리를 주고 이어 쓰게 함
         seed = corpus[0][:12]
@@ -209,13 +364,12 @@ def main():
         print(f"이어 쓰기 시험: {vocab.dec(ids)}")
 
     print("\n2단계: 대화로 말하는 법 배우기")
-    run("대화학습", sft_steps, d["lr"] * 0.5,
+    run("대화학습", sft_steps, d["lr"] * 0.5 * lr_scale,
         lambda: loss_of(*sft_batch(random.choices(dialog, k=d["batch"]))) + 0.2 * loss_of(*lm_batch(d["batch"] // 4)))
     show("학습 결과")
 
     # 저장 (이전 모델 백업)
     model.eval().cpu().float()
-    out = os.path.join(args.dir, "models")
     os.makedirs(out, exist_ok=True)
     if os.path.exists(os.path.join(out, "arcana-chat.safetensors")):
         bk = os.path.join(out, "backup-" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
@@ -237,6 +391,10 @@ def main():
     }
     with open(os.path.join(out, "arcana-chat.json"), "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False, indent=1)
+    # 이번에 배운 문서 기록 (다음에 이어서 학습할 때 새 문서만 골라내려고)
+    with open(os.path.join(out, "arcana-chat.seen"), "w", encoding="utf-8") as f:
+        f.write("\n".join(sorted(seen | {text_hash(t) for t in corpus})))
+    clean_backups(out, keep=3)
     print(f"\n완료! → {out}\n학습 탭에서 /Reload 를 입력하거나 앱을 다시 켜면 새 모델로 대화합니다.")
 
 

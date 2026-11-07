@@ -216,6 +216,10 @@ def main():
         os.makedirs(bk)
         for f in ("arcana-chat.safetensors", "arcana-chat.json"):
             shutil.copy2(os.path.join(user_models, f), bk)
+    # 오래된 백업은 최근 3개만 남김
+    bks = sorted(d for d in os.listdir(user_models) if d.startswith("backup-") and os.path.isdir(os.path.join(user_models, d)))
+    for d in bks[:-3]:
+        shutil.rmtree(os.path.join(user_models, d), ignore_errors=True)
     write_safetensors(os.path.join(user_models, "arcana-chat.safetensors"), model.state_dict())
     meta["config"] = model.config
     meta["vocab"] = vocab.itos
