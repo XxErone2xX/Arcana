@@ -4,7 +4,7 @@
   python pretrain_notes.py                 # 그래픽카드 있으면 base(약 2,600만), 없으면 small(약 200만)
   python pretrain_notes.py --size small    # 크기 직접 지정
 
-  1단계 사전학습: 공책 문서(%APPDATA%\\Arcana\\knowledge\\docs.jsonl)를 읽으며 "다음 글자 맞히기"
+  1단계 사전학습: 공책 문서 본문(%APPDATA%\\Arcana\\knowledge\\fulltext.jsonl, 없으면 docs.jsonl 요약)을 읽으며 "다음 글자 맞히기"
                  → 한국어 문장 자체(어휘, 문법, 문장 흐름)를 배움
   2단계 대화 학습: data/*.jsonl 대화 + 가르쳐 준 대답(taught.jsonl)으로 말하는 법을 배움
                  (1단계 실력을 잊지 않게 사전학습 글도 조금씩 섞음)
@@ -46,13 +46,21 @@ def korean_ratio(s):
     return sum("가" <= c <= "힣" for c in letters) / max(len(letters), 1)
 
 
-def load_corpus(kdir):
+def load_corpus(kdir, max_chars):
+    """1단계 재료: fulltext.jsonl(본문 전체) + 본문이 없는 문서는 docs.jsonl 요약"""
+    full = read_jsonl(os.path.join(kdir, "fulltext.jsonl"))
     docs = read_jsonl(os.path.join(kdir, "docs.jsonl"))
-    texts, skipped = [], collections.Counter()
+    texts, skipped, have = [], collections.Counter(), set()
+    for d in full:
+        text = d.get("text", "").strip()
+        if korean_ratio(text) < 0.5:
+            skipped["한국어 아님"] += 1
+            continue
+        texts.append(text)
+        have.add(d.get("url", "") or d.get("title", ""))
     for d in docs:
-        url, src, text = d.get("url", ""), d.get("source", ""), d.get("summary", "").strip()
-        if not ("wikipedia.org" in url or src == "사용자"):
-            skipped["위키백과 아님(저작권)"] += 1
+        src, text = d.get("source", ""), d.get("summary", "").strip()
+        if (d.get("url", "") or d.get("title", "")) in have:
             continue
         if korean_ratio(text) < 0.5:
             skipped["한국어 아님"] += 1
@@ -63,7 +71,16 @@ def load_corpus(kdir):
         if src == "사용자" and not text.startswith(d.get("title", "")):
             text = f"{d['title']}: {text}"  # 직접 가르쳐 준 뜻은 "단어: 뜻" 형태로
         texts.append(text)
-    return texts, len(docs), skipped
+    # 너무 많으면 최근 것 위주로 (메모리 보호)
+    total, keep = 0, []
+    for t in reversed(texts):
+        if total + len(t) > max_chars:
+            skipped["용량 초과(오래된 것)"] += 1
+            continue
+        keep.append(t)
+        total += len(t)
+    keep.reverse()
+    return keep, len(docs), skipped, len(full)
 
 
 def load_dialogue(kdir):
@@ -84,6 +101,7 @@ def main():
     ap.add_argument("--size", choices=PRESETS)
     ap.add_argument("--pre-steps", type=int)
     ap.add_argument("--sft-steps", type=int)
+    ap.add_argument("--max-chars", type=int, default=60_000_000, help="1단계에 쓸 최대 글자 수 (메모리 보호)")
     ap.add_argument("--min-char", type=int, default=3, help="이보다 적게 나온 글자는 사전에서 뺌 (한자·특수문자 정리)")
     args = ap.parse_args()
     random.seed(0)
@@ -96,9 +114,9 @@ def main():
     pre_steps, sft_steps = args.pre_steps or d["pre_steps"], args.sft_steps or d["sft_steps"]
     kdir = os.path.join(args.dir, "knowledge")
 
-    corpus, n_docs, skipped = load_corpus(kdir)
+    corpus, n_docs, skipped, n_full = load_corpus(kdir, args.max_chars)
     pairs, mine = load_dialogue(kdir)
-    print(f"공책 문서 {n_docs:,}개 중 {len(corpus):,}개 사용 ({sum(map(len, corpus)):,}글자)  제외: {dict(skipped)}")
+    print(f"공책 문서 {n_docs:,}개 (본문 전체 {n_full:,}개) 중 {len(corpus):,}개 사용 ({sum(map(len, corpus)):,}글자)  제외: {dict(skipped)}")
     print(f"대화 데이터 {len(pairs):,}쌍 + 직접 가르친 대답 {len(mine)}개")
     if len(corpus) < 50:
         print("공책 문서가 너무 적습니다. 학습 탭에서 /Start 로 위키백과를 더 공부한 뒤 다시 해 주세요.")

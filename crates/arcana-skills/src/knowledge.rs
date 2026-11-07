@@ -6,7 +6,8 @@
 //! - 모르는 게 생기면 사용자에게 질문 → 대답을 기억
 //!
 //! 저장 위치: %APPDATA%\Arcana\knowledge\
-//!   docs.jsonl       알게 된 문서들
+//!   docs.jsonl       알게 된 문서들 (제목·짧은 요약·주소 — 대답할 때 찾아보는 용)
+//!   fulltext.jsonl   문서 본문 전체 (대화 모델 학습 재료)
 //!   frontier.json    다음에 읽을 문서 목록
 //!   questions.json   사용자에게 물어볼 질문들
 //!   taught.jsonl     사용자가 가르쳐 준 대답  (형식이 train_chat.py --data 와 같아서 재학습에도 쓸 수 있음)
@@ -463,6 +464,30 @@ impl Knowledge {
         doc
     }
 
+    /// 본문 전체 저장 (요약하지 않음) → fulltext.jsonl. 대화 모델 1단계 학습 재료.
+    /// 메모리에는 안 올리고 파일에만 씀
+    fn save_text(&self, title: &str, url: &str, source: &str, text: &str) {
+        let text = text.trim();
+        if text.chars().count() < 200 {
+            return;
+        }
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(self.dir.join("fulltext.jsonl")) {
+            let row = serde_json::json!({ "title": title, "url": url, "source": source, "text": text, "learned_at": now() });
+            let _ = writeln!(f, "{row}");
+        }
+    }
+
+    /// 위키백과 문서 본문 전체 (일반 글자로)
+    fn wiki_fulltext(&self, lang: &str, title: &str) -> Option<String> {
+        let url = format!(
+            "{}/w/api.php?action=query&prop=extracts&explaintext=1&exsectionformat=plain&redirects=1&format=json&titles={}",
+            Self::wiki(lang),
+            urlencoding::encode(title)
+        );
+        let v = self.get_json(&url).ok()?;
+        v["query"]["pages"].as_object()?.values().find_map(|p| p["extract"].as_str().map(String::from))
+    }
+
     // ───────────── 위키백과 (여러 언어) ─────────────
 
     fn get_json(&self, url: &str) -> Result<serde_json::Value, String> {
@@ -627,6 +652,12 @@ impl Knowledge {
                 .take(6)
                 .collect();
             return Ok(Learned::Ambiguous { title, options });
+        }
+        let known = self.index.read().unwrap().contains_key(&normalize(&title));
+        if !known {
+            if let Some(full) = self.wiki_fulltext(lang, &title) {
+                self.save_text(&title, &url, source, &full);
+            }
         }
         let doc = self.add(Doc {
             title: title.clone(),
@@ -828,10 +859,12 @@ impl Knowledge {
         {
             return Ok(Step::Skip); // 이미 아는 페이지 (주소만 다른 같은 페이지 등)
         }
+        let url = crawler::canonical(&final_url);
+        self.save_text(&page.title, &url, "웹", &page.text);
         let doc = self.add(Doc {
             title: page.title,
             summary: page.summary,
-            url: crawler::canonical(&final_url),
+            url,
             source: "웹".into(),
             learned_at: now(),
         });
@@ -886,6 +919,9 @@ impl Knowledge {
         }
         let url = crawler::canonical(&final_url);
         if page.title.chars().count() >= 2 && page.summary.chars().count() >= 20 && !page.noindex {
+            if !self.index.read().unwrap().contains_key(&normalize(&page.title)) {
+                self.save_text(&page.title, &url, "웹", &page.text);
+            }
             self.add(Doc {
                 title: page.title.clone(),
                 summary: page.summary.clone(),

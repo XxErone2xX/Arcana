@@ -128,47 +128,20 @@ fn pattern_match(pat: &str, path: &str) -> bool {
 const BLOCKED_TLDS: &[&str] = &[
     ".xxx", ".adult", ".porn", ".sex", ".casino", ".bet", ".poker", ".onion",
 ];
+/// 주소에 이런 말이 있으면 안 감: 19금(성인)·불법 도박 사이트만
 const BLOCKED_WORDS: &[&str] = &[
-    "porn",
-    "xxx",
-    "hentai",
-    "nsfw",
-    "casino",
-    "gambling",
-    "betting",
-    "escort",
-    "torrent",
-    "warez",
-    "crack",
-    "야동",
-    "성인용",
-    "19금",
-    "카지노",
-    "토토",
-    "도박",
-    "바카라",
-    "슬롯머신",
-    "불법",
-    "먹튀",
-    "섹스",
+    "porn", "xxx", "hentai", "nsfw", "escort", "야동", "성인용", "19금", "섹스",
+    "casino", "betting", "bet365", "카지노", "토토", "바카라", "먹튀", "슬롯머신",
 ];
+/// 내용(제목·요약)에 이런 말이 있으면 저장 안 함 — 일반 문서("도박의 역사" 등)는 막지 않게 사이트 광고 말만
+const BLOCKED_CONTENT: &[&str] = &[
+    "porn", "xxx", "hentai", "야동", "성인용", "19금", "섹스",
+    "토토사이트", "카지노사이트", "바카라사이트", "먹튀검증", "온라인카지노", "사설토토",
+];
+/// 막는 게 아니라, 읽을 내용이 없는 페이지 (로그인·결제·편집 화면, 끝없는 검색 결과)
 const SKIP_PATH_WORDS: &[&str] = &[
-    "login",
-    "signin",
-    "signup",
-    "register",
-    "logout",
-    "account",
-    "cart",
-    "checkout",
-    "payment",
-    "password",
-    "admin",
-    "wp-admin",
-    "/search",
-    "?search",
-    "action=edit",
-    "special:",
+    "login", "signin", "signup", "logout", "checkout", "payment", "password", "wp-admin",
+    "/search", "?search", "action=edit", "special:",
 ];
 const SKIP_EXT: &[&str] = &[
     ".pdf", ".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".zip", ".rar", ".7z", ".exe",
@@ -210,7 +183,7 @@ pub fn url_ok(u: &Url, blocked_domains: &[String]) -> bool {
 /// 내용이 괜찮은지 (제목·요약에 위험한 단어가 있으면 저장 안 함)
 pub fn content_ok(title: &str, summary: &str) -> bool {
     let t = format!("{title} {summary}").to_lowercase();
-    !BLOCKED_WORDS.iter().any(|w| t.contains(w))
+    !BLOCKED_CONTENT.iter().any(|w| t.contains(w))
 }
 
 /// 같은 페이지를 다른 주소로 두 번 읽지 않게 정리 (#뒤 제거, 끝의 / 정리)
@@ -235,6 +208,8 @@ pub struct Page {
     pub link_texts: Vec<String>,
     /// 페이지 소제목들 (h2, h3)
     pub headings: Vec<String>,
+    /// 본문 전체 (메뉴·광고·스크립트 빼고). 요약하지 않음
+    pub text: String,
     /// <meta name="robots" content="noindex"> 면 저장 안 함
     pub noindex: bool,
     pub nofollow: bool,
@@ -246,6 +221,52 @@ fn sel(s: &str) -> Selector {
 
 fn clean(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// 본문 전체 뽑기: article/main 이 있으면 그 안, 없으면 body. 메뉴·머리말·꼬리말·옆칸·스크립트는 뺌
+fn main_text(doc: &Html) -> String {
+    const MAX: usize = 200_000;
+    let root = ["article", "main", "[role=main]", "#content", "#mw-content-text", "body"]
+        .iter()
+        .find_map(|q| doc.select(&sel(q)).next());
+    let Some(root) = root else { return String::new() };
+    let skip = ["nav", "header", "footer", "aside", "script", "style", "noscript", "form", "button", "select", "template", "svg"];
+    let blocks = sel("h1, h2, h3, h4, h5, p, li, blockquote, pre, td, th, dd, dt, figcaption");
+    let mut out = String::new();
+    let mut last = String::new();
+    for el in root.select(&blocks) {
+        // 안쪽 블록이 따로 또 잡히는 것(li 안의 p 등)과 메뉴 안의 글은 건너뜀
+        let mut bad = false;
+        let mut nested = false;
+        for anc in el.ancestors().filter_map(scraper::ElementRef::wrap) {
+            if anc.id() == root.id() {
+                break;
+            }
+            let n = anc.value().name();
+            if skip.contains(&n) {
+                bad = true;
+                break;
+            }
+            if matches!(n, "p" | "li" | "blockquote" | "td" | "th" | "dd" | "pre") {
+                nested = true;
+            }
+        }
+        if bad || nested {
+            continue;
+        }
+        let t = if el.value().name() == "pre" { el.text().collect::<String>() } else { clean(&el.text().collect::<String>()) };
+        let t = t.trim();
+        if t.chars().count() < 2 || t == last {
+            continue;
+        }
+        out.push_str(t);
+        out.push('\n');
+        last = t.to_string();
+        if out.len() > MAX {
+            break;
+        }
+    }
+    out.trim().to_string()
 }
 
 /// "블랙홀 - 위키백과, 우리 모두의 백과사전" → "블랙홀"
@@ -332,7 +353,9 @@ pub fn parse_html(html: &str, base: &Url) -> Page {
         .filter(|t| (2..60).contains(&t.chars().count()))
         .take(8)
         .collect();
+    let text = main_text(&doc);
     Page {
+        text,
         link_texts,
         headings,
         title,
@@ -380,7 +403,11 @@ mod tests {
         assert!(!ok("http://192.168.0.1/"));
         assert!(!ok("ftp://example.com/"));
         assert!(content_ok("블랙홀", "중력이 매우 강한 천체"));
-        assert!(!content_ok("최고의 카지노", ""));
+        assert!(!content_ok("최고의 온라인카지노 가입", ""));
+        assert!(content_ok("도박 중독", "도박 중독은 도박을 멈추지 못하는 상태입니다"));
+        assert!(ok("https://ko.wikipedia.org/wiki/암호_해독")); // 예전엔 crack·불법 같은 말로 막히던 일반 문서
+        let p = parse_html("<html><body><nav><a href='/'>홈</a> 메뉴</nav><article><h1>제목</h1><p>첫 문단입니다.</p><ul><li><p>목록 안 문단</p></li></ul><script>x()</script></article><footer>저작권</footer></body></html>", &Url::parse("https://a.com/").unwrap());
+        assert_eq!(p.text, "제목\n첫 문단입니다.\n목록 안 문단");
         assert_eq!(
             canonical(&Url::parse("https://a.com/b/#top").unwrap()),
             "https://a.com/b"
