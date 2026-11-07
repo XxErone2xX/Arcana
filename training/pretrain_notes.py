@@ -235,7 +235,7 @@ def main():
     ap.add_argument("--pre-steps", type=int)
     ap.add_argument("--sft-steps", type=int)
     ap.add_argument("--fresh", action="store_true", help="이어서 학습하지 않고 처음부터 새로 학습")
-    ap.add_argument("--max-chars", type=int, default=60_000_000, help="1단계에 쓸 최대 글자 수 (메모리 보호)")
+    ap.add_argument("--max-chars", type=int, default=200_000_000, help="1단계에 쓸 최대 글자 수 (메모리 보호)")
     ap.add_argument("--min-char", type=int, default=3, help="이보다 적게 나온 글자는 사전에서 뺌 (한자·특수문자 정리)")
     args = ap.parse_args()
     random.seed(0)
@@ -296,10 +296,13 @@ def main():
 
     # 1단계용: 문서들을 이어 붙인 긴 글자 줄
     def to_stream(texts):
-        ids = []
+        # 글자 번호를 4바이트씩 촘촘히 (파이썬 리스트보다 메모리를 약 10배 덜 씀 → 위키백과 덤프도 들어감)
+        import array
+        ids = array.array("i")
         for t in texts:
-            ids += vocab.enc(t, lower=False) + [EOS]
-        return torch.tensor(ids, dtype=torch.long)
+            ids.extend(vocab.enc(t, lower=False))
+            ids.append(EOS)
+        return torch.frombuffer(ids, dtype=torch.int32).clone()
 
     stream = to_stream(corpus)
     # 이어서 학습할 때: 절반은 새 문서에서, 절반은 예전 문서 복습 (잊어버리지 않게)
@@ -308,7 +311,7 @@ def main():
     def lm_batch(n):
         def take(st, k):
             idx = torch.randint(0, len(st) - L - 1, (k,))
-            return torch.stack([st[i:i + L] for i in idx]), torch.stack([st[i + 1:i + L + 1] for i in idx])
+            return (torch.stack([st[i:i + L] for i in idx]).long(), torch.stack([st[i + 1:i + L + 1] for i in idx]).long())
         if new_stream is not None and n >= 2:
             (x1, y1), (x2, y2) = take(new_stream, n // 2), take(stream, n - n // 2)
             x, y = torch.cat([x1, x2]), torch.cat([y1, y2])

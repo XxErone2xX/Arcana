@@ -25,6 +25,8 @@ pub struct Config {
     pub obey_robots: bool,
     /// 자율 탐색 간격 (초). 0 = 쉬지 않고 계속
     pub study_interval_secs: u64,
+    /// 동시에 읽는 일꾼 수 (서로 다른 사이트를 동시에). 많을수록 빠름. 1~32, 바꾸면 앱 재시작 후 적용
+    pub study_workers: usize,
     /// 공부할 위키백과 언어들 (ko=한국어, en=영어, ja=일본어 ...)
     pub wiki_langs: Vec<String>,
     /// 위키백과 말고 일반 웹사이트도 돌아다닐지
@@ -178,7 +180,7 @@ impl Default for Config {
             ),
         );
         Self {
-            version: 7,
+            version: 8,
             name: "Arcana".into(),
             threshold: 0.55,
             auto_update: true,
@@ -187,6 +189,7 @@ impl Default for Config {
             study_only: String::new(),
             obey_robots: false,
             study_interval_secs: 0,
+            study_workers: 8,
             wiki_langs: vec!["ko".into(), "en".into(), "ja".into()],
             explore_web: true,
             blocked_domains: vec![],
@@ -298,6 +301,12 @@ impl Config {
                     if c.version < 7 {
                         c.obey_robots = false;
                         c.version = 7;
+                        c.save(dir);
+                    }
+                    // v7 → v8: 여러 일꾼이 동시에 읽기
+                    if c.version < 8 {
+                        c.study_workers = 8;
+                        c.version = 8;
                         c.save(dir);
                     }
                     c

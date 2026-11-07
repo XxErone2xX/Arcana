@@ -256,6 +256,8 @@ const TRAINING_FILES: &[(&str, &str)] = &[
     ("import_aihub_callcenter.py", include_str!("../../../training/import_aihub_callcenter.py")),
     ("requirements.txt", include_str!("../../../training/requirements.txt")),
     ("공책으로_학습하기.bat", include_str!("../../../training/공책으로_학습하기.bat")),
+    ("import_wiki_dump.py", include_str!("../../../training/import_wiki_dump.py")),
+    ("위키백과_한번에_받기.bat", include_str!("../../../training/위키백과_한번에_받기.bat")),
     ("큰모델_학습하기.bat", include_str!("../../../training/큰모델_학습하기.bat")),
     ("피드백_학습하기.bat", include_str!("../../../training/피드백_학습하기.bat")),
 ];
@@ -508,6 +510,18 @@ impl Assistant {
                 "train" | "학습" => {
                     lines.extend(self.start_training(rest.trim().trim_matches('"')))
                 }
+                "wiki" | "위키" | "위키백과" => {
+                    // 위키백과 전체 덤프 받기 (언어: /Wiki ja)
+                    let lang = rest.trim().to_lowercase();
+                    let lang = if lang.is_empty() { "ko".to_string() } else { lang };
+                    if !lang.chars().all(|c| c.is_ascii_lowercase()) || lang.len() > 12 {
+                        lines.push("언어는 ko, en, ja 처럼 적어 주십시오. 예: /Wiki ja".into());
+                    } else {
+                        lines.extend(self.open_tool_window("위키백과 받기", "위키백과_한번에_받기.bat", &lang));
+                        lines.push(format!("위키백과({lang}) 전체를 받아서 문서 본문만 뽑습니다. 사이트를 한 장씩 읽는 것보다 훨씬 빠릅니다 (한국어 약 1GB, 10~40분)."));
+                        lines.push("끝나면 다음 학습 때 1단계 재료로 쓰입니다.".into());
+                    }
+                }
                 "diag" | "진단" => {
                     lines.push("인터넷 연결을 확인하는 중입니다…".into());
                     lines.extend(net::diagnose());
@@ -539,6 +553,7 @@ impl Assistant {
                     lines.push("/Start  스스로 학습 시작".into());
                     lines.push("/Start (링크)  이 링크부터 읽기 시작해서 이어지는 곳을 공부".into());
                     lines.push("/Start only (링크)  이 사이트에서만 공부 (위키백과 링크면 위키백과만)".into());
+                    lines.push("/Wiki (언어)  위키백과 전체를 한 번에 받아서 학습 재료로 (기본 한국어, 예: /Wiki ja)".into());
                     lines.push("/Stop   학습 멈추기".into());
                     lines.push("/Status 지금까지 배운 것".into());
                     lines.push("/Skip   지금 질문 넘기기".into());
@@ -625,6 +640,30 @@ impl Assistant {
             "이 컴퓨터에서는 직접 실행해 주십시오: cd \"{}\" && python pretrain_notes.py",
             dir.display()
         )]
+    }
+
+    /// 학습 도구 폴더의 bat 파일을 새 창으로 실행
+    fn open_tool_window(&self, title: &str, bat: &str, args: &str) -> Vec<String> {
+        let dir = match install_training_tools(&self.data_dir) {
+            Ok(d) => d,
+            Err(e) => return vec![format!("도구를 준비하지 못했습니다. ({e})")],
+        };
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            let r = std::process::Command::new("cmd")
+                .raw_arg(format!("/C start \"{title}\" /D \"{}\" \"{bat}\" {args}", dir.display()))
+                .spawn();
+            return match r {
+                Ok(_) => vec![format!("'{title}' 창을 열었습니다.")],
+                Err(e) => vec![format!("창을 열지 못했습니다. ({e})")],
+            };
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = (title, args);
+            vec![format!("이 컴퓨터에서는 직접 실행해 주십시오: cd \"{}\" && {bat}", dir.display())]
+        }
     }
 
     fn emit_question(&self) {

@@ -28,7 +28,7 @@ use url::Url;
 
 const FRONTIER_MAX: usize = 5000;
 const QUESTIONS_MAX: usize = 50;
-const DAILY_LIMIT: usize = 50_000;
+const DAILY_LIMIT: usize = 1_000_000;
 const MAX_HTML: u64 = 2 * 1024 * 1024;
 
 /// 다른 언어 위키·일반 웹사이트 첫 시작점 (v0.5부터)
@@ -313,6 +313,12 @@ pub struct Knowledge {
     page_hash: Mutex<HashMap<String, u64>>,
     /// 다시 확인한 시각 (같은 페이지를 하루에 여러 번 확인하지 않게)
     refreshed: Mutex<HashMap<String, Instant>>,
+    /// 파일에 한 줄씩 쓸 때 여러 일꾼의 줄이 섞이지 않게
+    io_lock: Mutex<()>,
+    add_lock: Mutex<()>,
+    frontier_saved: Mutex<Option<Instant>>,
+    /// 위키백과 API 를 동시에 부르는 수 (위키미디어 이용 수칙: 너무 많이 동시에 부르지 않기)
+    wiki_inflight: Mutex<usize>,
     /// 여러 사이트에 걸친 연속 연결 실패 (5번이면 진짜 인터넷 문제로 보고 쉼)
     net_fail_streak: Mutex<usize>,
     /// /Start 할 때 쉬고 있던 공부를 바로 깨우는 신호
@@ -451,6 +457,10 @@ impl Knowledge {
             site_problem: Mutex::new(HashMap::new()),
             loading_tries: Mutex::new(HashMap::new()),
             refreshed: Mutex::new(HashMap::new()),
+            io_lock: Mutex::new(()),
+            add_lock: Mutex::new(()),
+            frontier_saved: Mutex::new(None),
+            wiki_inflight: Mutex::new(0),
             sitemap_done: Mutex::new(HashMap::new()),
             page_hash: Mutex::new(std::fs::read_to_string(dir.join("page_hashes.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()),
             net_fail_streak: Mutex::new(0),
@@ -513,15 +523,19 @@ impl Knowledge {
 
     fn add(&self, doc: Doc) -> Doc {
         let key = normalize(&doc.title);
+        let _one = self.add_lock.lock().unwrap(); // 같은 문서를 두 일꾼이 동시에 넣지 않게
         if let Some(&i) = self.index.read().unwrap().get(&key) {
             return self.docs.read().unwrap()[i].clone();
         }
-        if let Ok(mut f) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(self.dir.join("docs.jsonl"))
         {
-            let _ = writeln!(f, "{}", serde_json::to_string(&doc).unwrap());
+            let _io = self.io_lock.lock().unwrap();
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(self.dir.join("docs.jsonl"))
+            {
+                let _ = writeln!(f, "{}", serde_json::to_string(&doc).unwrap());
+            }
         }
         let mut docs = self.docs.write().unwrap();
         docs.push(doc.clone());
@@ -537,6 +551,7 @@ impl Knowledge {
         if text.chars().count() < 200 {
             return;
         }
+        let _io = self.io_lock.lock().unwrap();
         if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(self.dir.join("fulltext.jsonl")) {
             let row = serde_json::json!({ "title": title, "url": url, "source": source, "text": text, "learned_at": now() });
             let _ = writeln!(f, "{row}");
@@ -843,12 +858,17 @@ impl Knowledge {
         self.wake();
     }
 
+    /// 대기열 파일 저장. 일꾼들이 자주 부르므로 3초에 한 번만 실제로 씀
     fn save_frontier(&self) {
-        let f = self.frontier.lock().unwrap();
-        let _ = std::fs::write(
-            self.dir.join("frontier.json"),
-            serde_json::to_string(&*f).unwrap(),
-        );
+        {
+            let mut last = self.frontier_saved.lock().unwrap();
+            if last.map_or(false, |t| t.elapsed() < Duration::from_secs(3)) {
+                return;
+            }
+            *last = Some(Instant::now());
+        }
+        let json = serde_json::to_string(&*self.frontier.lock().unwrap()).unwrap();
+        let _ = std::fs::write(self.dir.join("frontier.json"), json);
     }
 
     fn learn_wiki(
@@ -983,15 +1003,14 @@ impl Knowledge {
         } else {
             Duration::from_secs(s.site_delay_secs.max(1))
         };
-        if let Some(last) = self.site_last.lock().unwrap().get(&host) {
-            if last.elapsed() < delay {
+        // 같은 사이트를 여러 일꾼이 동시에 읽지 않게: 확인과 기록을 한 번에
+        {
+            let mut last = self.site_last.lock().unwrap();
+            if last.get(&host).map_or(false, |t| t.elapsed() < delay) {
                 return Ok(Step::Later);
             }
+            last.insert(host.clone(), Instant::now());
         }
-        self.site_last
-            .lock()
-            .unwrap()
-            .insert(host.clone(), Instant::now());
         *self
             .site_today
             .lock()
@@ -1098,7 +1117,7 @@ impl Knowledge {
             }
             self.push_targets_front(items);
         } else if !page.nofollow || !s.obey_robots {
-            // 링크: 같은 사이트 3개 + 다른 사이트 5개 (한쪽으로 안 쏠리게)
+            // 링크: 같은 사이트 4개 + 다른 사이트 10개 (한쪽으로 안 쏠리게, 여러 일꾼이 동시에 읽을 사이트가 많게)
             let (mut same, mut other) = (0, 0);
             let mut items = Vec::new();
             for l in page
@@ -1107,7 +1126,7 @@ impl Knowledge {
                 .filter(|l| crawler::url_ok(l, &s.blocked_domains))
             {
                 let is_same = Self::host_of(l) == host;
-                if (is_same && same < 3) || (!is_same && other < 5) {
+                if (is_same && same < 4) || (!is_same && other < 10) {
                     if is_same {
                         same += 1
                     } else {
@@ -1582,7 +1601,19 @@ impl Knowledge {
                     {
                         continue;
                     }
-                    match self.learn_wiki(&lang, &title, "탐색", Some(s)) {
+                    {
+                        let mut n = self.wiki_inflight.lock().unwrap();
+                        if *n >= 3 {
+                            drop(n);
+                            self.frontier.lock().unwrap().queue.push_back(item);
+                            postponed += 1;
+                            continue;
+                        }
+                        *n += 1;
+                    }
+                    let res = self.learn_wiki(&lang, &title, "탐색", Some(s));
+                    *self.wiki_inflight.lock().unwrap() -= 1;
+                    match res {
                         Ok(Learned::Doc(d)) => {
                             Ok(Step::Learned(d.title, format!("{lang}.wikipedia.org")))
                         }
@@ -1624,10 +1655,22 @@ impl Knowledge {
     }
 
     /// 백그라운드 스레드. 설정의 self_study 가 켜져 있을 때만 공부함 (/Start, /Stop)
+    /// 일꾼 여러 명이 동시에 서로 다른 사이트를 읽음 (같은 사이트는 간격을 지키며 한 명씩).
+    /// 일꾼 수는 설정의 study_workers (기본 8). 0번 일꾼만 알림·질문을 띄움.
     pub fn start_explorer(self: &Arc<Self>, config: Arc<RwLock<Config>>, events: EventSink) {
-        let me = self.clone();
-        std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_secs(3));
+        let n = config.read().unwrap().study_workers.clamp(1, 32);
+        for id in 0..n {
+            let me = self.clone();
+            let config = config.clone();
+            let events = events.clone();
+            std::thread::spawn(move || me.explore_loop(id, config, events));
+        }
+    }
+
+    fn explore_loop(self: Arc<Self>, id: usize, config: Arc<RwLock<Config>>, events: EventSink) {
+        let me = self;
+        {
+            std::thread::sleep(Duration::from_secs(3 + id as u64 / 4));
             let mut last_q: Option<Question> = None;
             loop {
                 let (on, interval, settings) = {
@@ -1647,7 +1690,9 @@ impl Knowledge {
                         });
                         interval
                     }
-                    Ok(Studied::Wait) => 1,
+                    Ok(Studied::Wait) => 0, // 아래에서 0.2초만 쉼
+                    Ok(Studied::Idle) if id != 0 => 30, // 다른 일꾼은 조용히 잠깐 쉼
+                    Err(_) if id != 0 => 60,
                     Ok(Studied::Idle) => {
                         events(Event::StudyLog {
                             text: match &settings.only {
@@ -1667,7 +1712,7 @@ impl Knowledge {
                         300
                     }
                 };
-                let q = me.current_question();
+                let q = if id == 0 { me.current_question() } else { None };
                 if q.is_some() && q != last_q {
                     events(Event::Question {
                         text: q.as_ref().unwrap().text(),
@@ -1675,15 +1720,18 @@ impl Knowledge {
                 }
                 last_q = q;
                 let woke = me.wake_count();
-                for _ in 0..wait {
+                if wait == 0 {
+                    std::thread::sleep(Duration::from_millis(200));
+                }
+                for _ in 0..wait * 10 {
                     // 멈추거나, 새로 /Start 하면 기다리지 않고 바로
                     if !config.read().unwrap().self_study || me.wake_count() != woke {
                         break;
                     }
-                    std::thread::sleep(Duration::from_secs(1));
+                    std::thread::sleep(Duration::from_millis(100));
                 }
             }
-        });
+        }
     }
 }
 
