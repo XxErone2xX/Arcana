@@ -21,6 +21,8 @@ pub struct Config {
     pub self_study: bool,
     /// /Start only (링크): 이 사이트에서만 공부 (예: "wikipedia.org", "namu.wiki"). 비어 있으면 어디든
     pub study_only: String,
+    /// 사이트의 수집 규칙(robots.txt) 지키기. 끄면 19금·불법 도박 사이트만 막고 다 읽음 (대신 같은 사이트는 1초 간격)
+    pub obey_robots: bool,
     /// 자율 탐색 간격 (초). 0 = 쉬지 않고 계속
     pub study_interval_secs: u64,
     /// 공부할 위키백과 언어들 (ko=한국어, en=영어, ja=일본어 ...)
@@ -176,13 +178,14 @@ impl Default for Config {
             ),
         );
         Self {
-            version: 6,
+            version: 7,
             name: "Arcana".into(),
             threshold: 0.55,
             auto_update: true,
             show_debug: false,
             self_study: false,
             study_only: String::new(),
+            obey_robots: false,
             study_interval_secs: 0,
             wiki_langs: vec!["ko".into(), "en".into(), "ja".into()],
             explore_web: true,
@@ -289,6 +292,12 @@ impl Config {
                         c.chat_min_fluency = 0.72;
                         c.chat_min_familiarity = 0.25;
                         c.version = 6;
+                        c.save(dir);
+                    }
+                    // v6 → v7: robots.txt 지키기 옵션 (사용자 요청으로 기본 끔)
+                    if c.version < 7 {
+                        c.obey_robots = false;
+                        c.version = 7;
                         c.save(dir);
                     }
                     c

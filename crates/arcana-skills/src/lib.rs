@@ -469,7 +469,11 @@ impl Assistant {
                     } else {
                         lines.push("학습을 시작합니다. 앱이 켜져 있는 동안 위키백과(한국어·영어·일본어)와 여러 웹사이트를 조금씩 읽으며 공부하겠습니다.".into());
                     }
-                    lines.push("쉬지 않고 계속 읽습니다. 사이트 규칙(robots.txt)은 지키고, 위험한 사이트는 건너뜁니다.".into());
+                    lines.push(if self.config.read().unwrap().obey_robots {
+                        "쉬지 않고 계속 읽습니다. 사이트 규칙(robots.txt)은 지키고, 위험한 사이트는 건너뜁니다.".into()
+                    } else {
+                        "쉬지 않고 계속 읽습니다. 19금·불법 도박 사이트는 건너뛰고, 같은 사이트는 1초 간격으로 읽습니다.".into()
+                    });
                     lines.push("모르는 게 생기면 여기서 여쭤보겠습니다.".into());
                     if self.config.read().unwrap().auto_train {
                         lines.push("새 재료가 모이면 PC를 쓰지 않는 동안 대화 모델도 알아서 학습해서 바로 적용합니다. (설정 → 모델에서 끌 수 있습니다)".into());

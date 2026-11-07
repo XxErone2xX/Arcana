@@ -152,6 +152,8 @@ pub struct CrawlSettings {
     pub site_daily_limit: usize,
     /// 이 사이트에서만 공부 (/Start only)
     pub only: Option<String>,
+    /// robots.txt 지키기
+    pub obey_robots: bool,
 }
 
 impl CrawlSettings {
@@ -165,6 +167,7 @@ impl CrawlSettings {
             // 한 사이트만 공부할 땐 그 사이트를 하루에 더 많이 읽음
             site_daily_limit: if only.is_some() { c.site_daily_limit.max(5000) } else { c.site_daily_limit.max(1) },
             only,
+            obey_robots: c.obey_robots,
         }
     }
 }
@@ -835,22 +838,20 @@ impl Knowledge {
         if *self.site_fail.lock().unwrap().get(&host).unwrap_or(&0) >= 3 {
             return Ok(Step::Skip); // 오늘 계속 실패한 사이트
         }
-        let robots = self.robots_for(&u);
-        let path = match u.query() {
-            Some(q) => format!("{}?{q}", u.path()),
-            None => u.path().to_string(),
+        // 같은 사이트 간격 (robots.txt 를 안 지킬 땐 최소 1초 — 사이트에 부담을 주거나 차단당하지 않게)
+        let delay = if s.obey_robots {
+            let robots = self.robots_for(&u);
+            let path = match u.query() {
+                Some(q) => format!("{}?{q}", u.path()),
+                None => u.path().to_string(),
+            };
+            if !robots.allowed(&path) {
+                return Ok(Step::Skip);
+            }
+            Duration::from_secs(robots.crawl_delay.unwrap_or(0).max(s.site_delay_secs).min(120))
+        } else {
+            Duration::from_secs(s.site_delay_secs.max(1))
         };
-        if !robots.allowed(&path) {
-            return Ok(Step::Skip);
-        }
-        // 같은 사이트 간격
-        let delay = Duration::from_secs(
-            robots
-                .crawl_delay
-                .unwrap_or(0)
-                .max(s.site_delay_secs)
-                .min(120),
-        );
         if let Some(last) = self.site_last.lock().unwrap().get(&host) {
             if last.elapsed() < delay {
                 return Ok(Step::Later);
@@ -932,7 +933,7 @@ impl Knowledge {
             self.push_targets(items);
         }
         let generic = ["home", "홈", "index", "welcome", "main page", "untitled"];
-        if page.noindex
+        if (page.noindex && s.obey_robots)
             || page.title.chars().count() < 2
             || generic.contains(&page.title.to_lowercase().as_str())
             || page.summary.chars().count() < 20

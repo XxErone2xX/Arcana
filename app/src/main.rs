@@ -35,6 +35,7 @@ struct Info {
     hotkey: String,
     hotkey_enabled: bool,
     auto_train: bool,
+    obey_robots: bool,
     auto_train_idle_min: u64,
     auto_train_status: String,
     /// 단축키 등록 실패 이유 (다른 프로그램이 쓰는 중 등)
@@ -116,6 +117,7 @@ fn info(app: AppHandle, state: State<AppState>) -> Info {
         hotkey: c.hotkey.clone(),
         hotkey_enabled: c.hotkey_enabled,
         auto_train: c.auto_train,
+        obey_robots: c.obey_robots,
         auto_train_idle_min: c.auto_train_idle_min,
         auto_train_status,
         hotkey_error: state.hotkey_error.lock().unwrap().clone(),
@@ -135,6 +137,7 @@ fn set_value(app: AppHandle, state: State<AppState>, key: String, value: serde_j
             "container_enabled" => c.container_enabled = value.as_bool().ok_or("참/거짓이 필요합니다")?,
             "hotkey_enabled" => c.hotkey_enabled = value.as_bool().ok_or("참/거짓이 필요합니다")?,
             "auto_train" => c.auto_train = value.as_bool().ok_or("참/거짓이 필요합니다")?,
+            "obey_robots" => c.obey_robots = value.as_bool().ok_or("참/거짓이 필요합니다")?,
             "auto_train_idle_min" => c.auto_train_idle_min = value.as_u64().ok_or("숫자가 필요합니다")?.clamp(1, 240),
             "hotkey" => {
                 let k = value.as_str().ok_or("글자가 필요합니다")?.trim().to_string();

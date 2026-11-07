@@ -62,6 +62,7 @@ async function render() {
   $("#opt-container").checked = info.container_enabled;
   $("#think-range").value = info.think_level;
   $("#opt-autotrain").checked = info.auto_train;
+  $("#opt-robots").checked = info.obey_robots;
   const idle = $("#idle-range");
   idle.value = info.auto_train_idle_min;
   idle.style.setProperty("--p", ((info.auto_train_idle_min - 1) / 59) * 100 + "%");
@@ -178,6 +179,7 @@ export function initSettings(c) {
   bool("#opt-memory", "memory_enabled");
   bool("#opt-container", "container_enabled");
   bool("#opt-autotrain", "auto_train");
+  bool("#opt-robots", "obey_robots");
   const idle = $("#idle-range");
   idle.oninput = () => {
     idle.style.setProperty("--p", ((idle.value - 1) / 59) * 100 + "%");

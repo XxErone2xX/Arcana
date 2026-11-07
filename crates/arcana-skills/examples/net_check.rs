@@ -36,6 +36,7 @@ fn main() {
         blocked_domains: vec![],
         site_delay_secs: 0,
         site_daily_limit: 100,
+        obey_robots: true,
         only: None,
     };
     for _ in 0..3 {
