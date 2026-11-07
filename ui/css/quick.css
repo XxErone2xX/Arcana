@@ -12,25 +12,30 @@ body { font-family: var(--font); color: #fff; -webkit-font-smoothing: antialiase
   width: min(920px, 86vw); text-align: center;
   transition: opacity .35s ease, transform .35s ease;
 }
-body.closed .say, body.closed .ask { opacity: 0; }
+body.closed .say, body.closed .ask, body.closed .who { opacity: 0; }
 
 /* 위: 대답 */
-.say { top: 7vh; max-height: 34vh; display: flex; flex-direction: column; align-items: center; gap: 8px; }
-.who { font-size: 12px; letter-spacing: .28em; text-transform: uppercase; color: rgba(220, 225, 255, .75); text-shadow: 0 0 12px rgba(120, 110, 255, .8); }
+.say { top: 6.5vh; max-height: 33vh; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+/* 이름은 맨 위 가장자리에, 대답은 그 아래 원래 자리에 */
+.who { position: fixed; top: 1.6vh; left: 50%; transform: translateX(-50%); transition: opacity .35s ease; font-size: 11px; letter-spacing: .28em; text-transform: uppercase; color: rgba(220, 225, 255, .75); text-shadow: 0 0 12px rgba(120, 110, 255, .8); }
 .reply {
-  font-size: clamp(17px, 1.6vw, 24px); line-height: 1.6; font-weight: 500; white-space: pre-wrap; word-break: break-word;
-  overflow-y: auto; max-height: 28vh; padding: 0 8px; user-select: text; cursor: text;
+  --size: clamp(17px, 1.6vw, 24px);
+  font-size: var(--size); line-height: 1.6; font-weight: 500; white-space: pre-wrap; word-break: break-word;
+  overflow-y: auto; max-height: 29vh; padding: 0 8px; user-select: text; cursor: text;
   text-shadow: 0 1px 14px rgba(10, 8, 40, .9), 0 0 2px rgba(0, 0, 0, .6);
   scrollbar-width: none;
 }
 .reply::-webkit-scrollbar { display: none; }
 .reply:empty { display: none; }
+/* 긴 대답: 글자를 조금 줄이고, 그래도 넘치면 칸 안에서 스크롤 (위아래 끝은 흐리게) */
+.reply.long { --size: clamp(15px, 1.25vw, 19px); text-align: left; }
+.reply.longer { --size: clamp(14px, 1.05vw, 16px); text-align: left; }
+.reply.overflow { -webkit-mask-image: linear-gradient(transparent, #000 1.2em, #000 calc(100% - 1.2em), transparent); mask-image: linear-gradient(transparent, #000 1.2em, #000 calc(100% - 1.2em), transparent); }
 .reply a { color: #c7d2fe; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
 .status { font-size: 13px; color: rgba(210, 215, 255, .8); min-height: 1em; }
 .status .dots span { display: inline-block; width: 5px; height: 5px; margin: 0 2px; border-radius: 50%; background: currentColor; animation: dot 1.2s infinite; }
 .status .dots span:nth-child(2) { animation-delay: .15s; }
 .status .dots span:nth-child(3) { animation-delay: .3s; }
-.say.idle .who { opacity: .35; }
 .caret { display: inline-block; width: .5em; height: 1.05em; margin-left: 2px; vertical-align: -3px; background: #fff; border-radius: 2px; box-shadow: 0 0 10px #a5b4fc; animation: blink 1s steps(2) infinite; }
 
 /* 아래: 입력 */

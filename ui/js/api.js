@@ -47,7 +47,7 @@ function mock() {
       return {
         understanding: { intent: "preview", confidence: 0.96, slots: {} },
         fallback: false,
-        reply: { text: `(미리보기) "${text}"에 대한 대답입니다. 대답은 이렇게 한 글자씩 써집니다. 링크도 됩니다: https://ko.wikipedia.org`, confirm: ask ? "진행할까요?" : null, quit: false, error: false, from_chat: !ask },
+        reply: { text: text.includes("길게") ? "(미리보기) 긴 대답 시험입니다. ".repeat(30) : `(미리보기) "${text}"에 대한 대답입니다. 대답은 이렇게 한 글자씩 써집니다. 링크도 됩니다: https://ko.wikipedia.org`, confirm: ask ? "진행할까요?" : null, quit: false, error: false, from_chat: !ask },
       };
     },
     async confirm() { return { text: "(미리보기) 확인했습니다.", error: false }; },

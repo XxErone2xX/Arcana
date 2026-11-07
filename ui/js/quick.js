@@ -56,11 +56,12 @@ class Wave {
     this.exit = new Tween(0);    // 사라질 때 Expo 로 빨라지는 정도
     this.clock = Math.random() * 100;
     this.layers = [
-      { base: 0.62, amp: 0.10, freq: 1.1, speed: 0.42, phase: 0.0, alpha: 0.55 },
-      { base: 0.48, amp: 0.12, freq: 1.7, speed: -0.6, phase: 1.7, alpha: 0.55 },
-      { base: 0.36, amp: 0.09, freq: 2.4, speed: 0.78, phase: 3.1, alpha: 0.6 },
-      { base: 0.24, amp: 0.07, freq: 3.1, speed: -0.95, phase: 4.4, alpha: 0.7 },
-      { base: 0.13, amp: 0.05, freq: 4.2, speed: 1.15, phase: 0.9, alpha: 0.85 },
+      // dark = 검정일 때 남는 진하기 (가장자리 쪽 얇은 층일수록 연하게 → 굵은 검은 띠가 안 생김)
+      { base: 0.62, amp: 0.10, freq: 1.1, speed: 0.42, phase: 0.0, alpha: 0.55, dark: 0.5 },
+      { base: 0.48, amp: 0.12, freq: 1.7, speed: -0.6, phase: 1.7, alpha: 0.55, dark: 0.42 },
+      { base: 0.36, amp: 0.09, freq: 2.4, speed: 0.78, phase: 3.1, alpha: 0.6, dark: 0.3 },
+      { base: 0.24, amp: 0.07, freq: 3.1, speed: -0.95, phase: 4.4, alpha: 0.7, dark: 0.18 },
+      { base: 0.13, amp: 0.05, freq: 4.2, speed: 1.15, phase: 0.9, alpha: 0.85, dark: 0.08 },
     ];
   }
   resize() {
@@ -87,10 +88,10 @@ class Wave {
     this.grow.set(0, 620, inExpo, now);   // 사라질 때: Expo 로 빨라지면서 사라짐
     this.exit.set(7, 620, inExpo, now);
   }
-  color(i, a, m) {
+  color(i, a, m, dark) {
     const [r, g, b] = this.pal[i % this.pal.length];
     // 검정(비활성)일 때는 연하게, 살짝 남색 기운이 남게
-    return `rgba(${lerp(4, r, m) | 0},${lerp(4, g, m) | 0},${lerp(12, b, m) | 0},${a * lerp(0.45, 1, m)})`;
+    return `rgba(${lerp(4, r, m) | 0},${lerp(4, g, m) | 0},${lerp(12, b, m) | 0},${a * lerp(dark, 1, m)})`;
   }
   draw(now, dt) {
     const { x, c } = this;
@@ -128,10 +129,10 @@ class Wave {
       // 물결 끝까지 투명해지게 해서 가장자리에 선이 생기지 않게
       const crest = (L.base * 1.12 + L.amp * 1.75) * h * g * sink;
       const grad = x.createLinearGradient(0, top ? 0 : h, 0, top ? crest : h - crest);
-      grad.addColorStop(0, this.color(i, L.alpha, m));
-      grad.addColorStop(0.5, this.color(i + 1, L.alpha * 0.5, m));
-      grad.addColorStop(0.82, this.color(i + 2, L.alpha * 0.12, m));
-      grad.addColorStop(1, this.color(i + 2, 0, m));
+      grad.addColorStop(0, this.color(i, L.alpha, m, L.dark));
+      grad.addColorStop(0.5, this.color(i + 1, L.alpha * 0.5, m, L.dark));
+      grad.addColorStop(0.82, this.color(i + 2, L.alpha * 0.12, m, L.dark));
+      grad.addColorStop(1, this.color(i + 2, 0, m, L.dark));
       x.fillStyle = grad;
       x.fill();
     });
@@ -184,6 +185,7 @@ function open() {
   token++;
   pendingConfirm = null;
   reply.textContent = "";
+  reply.className = "reply";
   status.textContent = "";
   sent.textContent = "";
   box.clear();
@@ -232,7 +234,17 @@ function thinking(text) {
 async function say(text, mine) {
   reply.textContent = "";
   status.textContent = "";
-  await typeOut(reply, text, { render: linkify, onTick: () => (reply.scrollTop = reply.scrollHeight) });
+  // 길이에 맞춰 글자 크기를 미리 정해서 칸을 넘지 않게
+  const n = [...text].length + (text.match(/\n/g)?.length ?? 0) * 40;
+  reply.classList.toggle("long", n > 140 && n <= 360);
+  reply.classList.toggle("longer", n > 360);
+  reply.classList.remove("overflow");
+  const fit = () => {
+    reply.classList.toggle("overflow", reply.scrollHeight > reply.clientHeight + 2);
+    reply.scrollTop = reply.scrollHeight;
+  };
+  await typeOut(reply, text, { render: linkify, onTick: fit });
+  reply.scrollTop = 0; // 다 쓰면 처음부터 읽을 수 있게
   if (mine !== token) return;
   st.aiBusy = false;
   st.shown = true;
