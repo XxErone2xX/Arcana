@@ -66,6 +66,7 @@ function mock() {
         capabilities: ["프로그램 켜기/끄기 — \"디코 켜줘\"", "타이머 — \"라면 3분 타이머\""],
         think_level: 3, memory_enabled: true, container_enabled: true, container_mb: 100,
         hotkey: "Alt+Shift+A", hotkey_enabled: true, hotkey_error: null,
+        auto_train: true, auto_train_idle_min: 10, auto_train_status: "자동 학습 켜짐 · 대화 재료 12쌍 · PC를 10분 안 쓰면 학습 · 아직 재료 부족 (대화 데이터 또는 가르친 대답 30개 필요)",
       };
     },
     async setValue(k, v) { (await this.info())[k] = v; },

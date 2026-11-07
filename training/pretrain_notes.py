@@ -22,6 +22,7 @@ import os
 import random
 import re
 import shutil
+import sys
 import time
 import torch
 import torch.nn.functional as F
@@ -101,13 +102,13 @@ def main():
     print(f"대화 데이터 {len(pairs):,}쌍 + 직접 가르친 대답 {len(mine)}개")
     if len(corpus) < 50:
         print("공책 문서가 너무 적습니다. 학습 탭에서 /Start 로 위키백과를 더 공부한 뒤 다시 해 주세요.")
-        return
+        sys.exit(2)
     if not pairs and len(mine) < 30:
         print("대화 데이터가 없습니다. 말하는 법(2단계)을 배울 대화가 필요합니다.")
         print("  - 비서다운 공손한 대화 데이터를 training/data/ 에 넣어 주세요 (convert_dialogue.py 로 변환 가능)")
         print("    추천: AI Hub '민원(콜센터) 질의-응답', '용도별 목적대화' (공손한 존댓말 상담 대화)")
         print("  - 또는 학습 탭 /Teach, 대화 탭 👎+더 좋은 대답으로 대답을 30개 이상 가르쳐 주세요")
-        return
+        sys.exit(2)
     dialog = pairs + mine * 5  # 직접 가르친 건 더 중요하게
 
     # 글자 사전: 자주 나온 글자 + 대화에 나온 글자는 전부

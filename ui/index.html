@@ -159,6 +159,18 @@
               </div>
             </div>
           </section>
+          <section class="group" id="sec-autotrain">
+            <h2>자동 학습</h2>
+            <p class="desc">학습 탭에서 /Start 로 켜 둔 동안 새 문서나 대화가 충분히 모이면, PC를 쓰지 않는 시간에 대화 모델을 알아서 학습하고 바로 적용합니다. 학습은 보이지 않게, 낮은 우선순위로 돌아갑니다.</p>
+            <label class="switch"><span>자동 학습 켜기</span><input type="checkbox" id="opt-autotrain" /><i></i></label>
+            <div class="field">
+              <span>PC를 안 쓴 지</span>
+              <b id="idle-label">10분</b>
+            </div>
+            <input type="range" class="slider" id="idle-range" min="1" max="60" step="1" />
+            <div class="scale"><span>1분</span><span>60분</span></div>
+            <p class="desc" id="autotrain-status" style="margin-top:10px"></p>
+          </section>
           <section class="group">
             <h2>모델</h2>
             <dl class="about" id="model-info"></dl>

@@ -50,6 +50,14 @@ pub struct Config {
     /// 빠른 호출 단축키 (어느 화면에서든 Arcana 부르기). 예: "Alt+Shift+A", "Ctrl+Space", "Alt+Q"
     pub hotkey: String,
     pub hotkey_enabled: bool,
+    /// 자동 학습: /Start 로 켜 둔 동안 재료가 모이고 PC를 안 쓰면 대화 모델을 알아서 학습·적용
+    pub auto_train: bool,
+    /// 마지막 학습 뒤 새 문서가 이만큼 모이면
+    pub auto_train_docs: usize,
+    /// 또는 새 대화 쌍(데이터·가르친 대답)이 이만큼 모이면
+    pub auto_train_pairs: usize,
+    /// PC를 이 시간(분) 동안 안 쓰고 있을 때만 학습
+    pub auto_train_idle_min: u64,
     /// 학습 도구 폴더 (Arcana 레포의 training 폴더). /Train 이 여기 있는 bat 을 실행
     pub training_dir: String,
     /// (선택) Brave Search API 키 — 넣으면 채팅 검색이 일반 웹 전체에서 됨. 없으면 위키백과 + DuckDuckGo 요약
@@ -162,7 +170,7 @@ impl Default for Config {
             ),
         );
         Self {
-            version: 4,
+            version: 5,
             name: "Arcana".into(),
             threshold: 0.55,
             auto_update: true,
@@ -186,6 +194,10 @@ impl Default for Config {
             container_mb: 100,
             hotkey: "Alt+Shift+A".into(),
             hotkey_enabled: true,
+            auto_train: true,
+            auto_train_docs: 2000,
+            auto_train_pairs: 30,
+            auto_train_idle_min: 10,
             apps,
         }
     }
@@ -246,6 +258,15 @@ impl Config {
                             c.hotkey = "Alt+Shift+A".into();
                         }
                         c.version = 4;
+                        c.save(dir);
+                    }
+                    // v4 → v5: 자동 학습 추가
+                    if c.version < 5 {
+                        c.auto_train = true;
+                        c.auto_train_docs = 2000;
+                        c.auto_train_pairs = 30;
+                        c.auto_train_idle_min = 10;
+                        c.version = 5;
                         c.save(dir);
                     }
                     c

@@ -8,6 +8,7 @@
 //! 2. `skills/mod.rs` 의 `builtin()` 목록에 추가
 //! 3. 새 의도면 `training/data.py` 에 문장 템플릿 추가 후 재학습
 
+pub mod autotrain;
 pub mod config;
 pub mod context;
 pub mod crawler;
@@ -225,6 +226,37 @@ pub fn load_talker(data_dir: &std::path::Path) -> Result<Option<arcana_core::Arc
         .map_err(|e| e.to_string())
 }
 
+/// 학습 도구 (training 폴더) — 앱 안에 넣어 두고 /Train 때 %APPDATA%\\Arcana\\training 에 풀어 씀.
+/// 그래서 레포를 따로 받을 필요가 없음.
+const TRAINING_FILES: &[(&str, &str)] = &[
+    ("chat_data.py", include_str!("../../../training/chat_data.py")),
+    ("chat_model.py", include_str!("../../../training/chat_model.py")),
+    ("convert_dialogue.py", include_str!("../../../training/convert_dialogue.py")),
+    ("data.py", include_str!("../../../training/data.py")),
+    ("export.py", include_str!("../../../training/export.py")),
+    ("model.py", include_str!("../../../training/model.py")),
+    ("pretrain_notes.py", include_str!("../../../training/pretrain_notes.py")),
+    ("train.py", include_str!("../../../training/train.py")),
+    ("train_chat.py", include_str!("../../../training/train_chat.py")),
+    ("train_feedback.py", include_str!("../../../training/train_feedback.py")),
+    ("requirements.txt", include_str!("../../../training/requirements.txt")),
+    ("공책으로_학습하기.bat", include_str!("../../../training/공책으로_학습하기.bat")),
+    ("큰모델_학습하기.bat", include_str!("../../../training/큰모델_학습하기.bat")),
+    ("피드백_학습하기.bat", include_str!("../../../training/피드백_학습하기.bat")),
+];
+
+/// 앱에 들어 있는 학습 도구를 data_dir/training 에 풀기 (data/ 폴더의 대화 데이터는 건드리지 않음)
+pub fn install_training_tools(data_dir: &std::path::Path) -> std::io::Result<PathBuf> {
+    let dir = data_dir.join("training");
+    std::fs::create_dir_all(dir.join("data"))?;
+    for (name, text) in TRAINING_FILES {
+        // bat 파일은 윈도우 줄바꿈으로
+        let body = if name.ends_with(".bat") { text.replace("\r\n", "\n").replace('\n', "\r\n") } else { text.to_string() };
+        std::fs::write(dir.join(name), body)?;
+    }
+    Ok(dir)
+}
+
 /// 두뇌 + 스킬 묶음. 앱은 이것만 쓰면 됨.
 pub struct Assistant {
     brain: Box<dyn Brain>,
@@ -235,7 +267,7 @@ pub struct Assistant {
     route: HashMap<String, usize>,
     pub config: Arc<RwLock<Config>>,
     pub data_dir: PathBuf,
-    events: EventSink,
+    pub(crate) events: EventSink,
     /// 메모리 (사용자에 대해 오래 기억)
     pub memory: memory::Memory,
     /// 컨테이너 메모리 (대화 기록 + 맥락)
@@ -390,6 +422,9 @@ impl Assistant {
                     lines.push("학습을 시작합니다. 앱이 켜져 있는 동안 위키백과(한국어·영어·일본어)와 여러 웹사이트를 조금씩 읽으며 공부하겠습니다.".into());
                     lines.push("쉬지 않고 계속 읽습니다. 사이트 규칙(robots.txt)은 지키고, 위험한 사이트는 건너뜁니다.".into());
                     lines.push("모르는 게 생기면 여기서 여쭤보겠습니다.".into());
+                    if self.config.read().unwrap().auto_train {
+                        lines.push("새 재료가 모이면 PC를 쓰지 않는 동안 대화 모델도 알아서 학습해서 바로 적용합니다. (설정 → 모델에서 끌 수 있습니다)".into());
+                    }
                 }
                 "stop" | "중지" | "멈춰" => {
                     set_running(false);
@@ -407,8 +442,12 @@ impl Assistant {
                     if !s.recent.is_empty() {
                         lines.push(format!("최근에 배운 것: {}", s.recent.join(", ")));
                     }
+                    lines.push(autotrain::status_line(self));
                 }
                 "reload" | "새로고침" => lines.push(self.reload_talker()),
+                "train" | "학습" if autotrain::RUNNING.load(std::sync::atomic::Ordering::SeqCst) => {
+                    lines.push("지금 자동 학습이 진행 중입니다. 끝나면 바로 적용하겠습니다.".into())
+                }
                 "train" | "학습" => {
                     lines.extend(self.start_training(rest.trim().trim_matches('"')))
                 }
@@ -494,14 +533,16 @@ impl Assistant {
             c.training_dir = path.to_string();
             c.save(&self.data_dir);
         }
-        let dir = std::path::PathBuf::from(self.config.read().unwrap().training_dir.clone());
-        if dir.as_os_str().is_empty() || !dir.join("pretrain_notes.py").exists() {
-            return vec![
-                "학습 도구가 있는 폴더를 알려 주십시오. (Arcana 레포의 training 폴더)".into(),
-                "예: /Train C:\\Users\\이름\\Arcana\\training".into(),
-                "레포가 없으시면: git clone https://github.com/XxErone2xX/Arcana".into(),
-            ];
-        }
+        // 직접 정한 폴더가 있으면 그걸, 없으면 앱에 들어 있는 학습 도구를 풀어서 씀
+        let custom = std::path::PathBuf::from(self.config.read().unwrap().training_dir.clone());
+        let dir = if !custom.as_os_str().is_empty() && custom.join("pretrain_notes.py").exists() {
+            custom
+        } else {
+            match install_training_tools(&self.data_dir) {
+                Ok(d) => d,
+                Err(e) => return vec![format!("학습 도구를 준비하지 못했습니다. ({e})")],
+            }
+        };
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
@@ -514,6 +555,7 @@ impl Assistant {
             return match r {
                 Ok(_) => vec![
                     "학습 창을 열었습니다. 공부한 문서로 한국어를 배운 뒤 대화 데이터로 말하는 법을 배웁니다.".into(),
+                    format!("대화 데이터(.jsonl)는 이 폴더에 넣어 주십시오: {}", dir.join("data").display()),
                     "끝나면 /Reload 를 입력해 주십시오.".into(),
                 ],
                 Err(e) => vec![format!("학습 창을 열지 못했습니다. ({e})")],
@@ -545,6 +587,11 @@ impl Assistant {
     pub fn start_self_study(&self) {
         self.knowledge
             .start_explorer(self.config.clone(), self.events.clone());
+    }
+
+    /// 자동 학습 감시 시작 (/Start 로 켜 둔 동안, 재료가 모이고 PC를 안 쓸 때 학습 → 바로 적용)
+    pub fn start_auto_train(self: &Arc<Self>) {
+        autotrain::start(self.clone());
     }
 
     pub fn talker_name(&self) -> Option<String> {

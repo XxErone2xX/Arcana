@@ -60,6 +60,12 @@ async function render() {
   $("#opt-memory").checked = info.memory_enabled;
   $("#opt-container").checked = info.container_enabled;
   $("#think-range").value = info.think_level;
+  $("#opt-autotrain").checked = info.auto_train;
+  const idle = $("#idle-range");
+  idle.value = info.auto_train_idle_min;
+  idle.style.setProperty("--p", ((info.auto_train_idle_min - 1) / 59) * 100 + "%");
+  $("#idle-label").textContent = `${info.auto_train_idle_min}분`;
+  $("#autotrain-status").textContent = info.auto_train_status ?? "";
   renderThink(info.think_level);
   $("#caps").replaceChildren(...info.capabilities.map((c) => Object.assign(document.createElement("li"), { textContent: c })));
   rows($("#model-info"), [
@@ -170,6 +176,13 @@ export function initSettings(c) {
   bool("#opt-hotkey", "hotkey_enabled");
   bool("#opt-memory", "memory_enabled");
   bool("#opt-container", "container_enabled");
+  bool("#opt-autotrain", "auto_train");
+  const idle = $("#idle-range");
+  idle.oninput = () => {
+    idle.style.setProperty("--p", ((idle.value - 1) / 59) * 100 + "%");
+    $("#idle-label").textContent = `${idle.value}분`;
+  };
+  idle.onchange = async () => { await api.setValue("auto_train_idle_min", +idle.value); refresh(); };
 
   $("#hotkey-btn").onclick = (e) => captureHotkey(e.currentTarget);
   $("#btn-config").onclick = () => api.openConfig();

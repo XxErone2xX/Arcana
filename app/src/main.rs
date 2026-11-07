@@ -34,6 +34,9 @@ struct Info {
     container_mb: u64,
     hotkey: String,
     hotkey_enabled: bool,
+    auto_train: bool,
+    auto_train_idle_min: u64,
+    auto_train_status: String,
     /// 단축키 등록 실패 이유 (다른 프로그램이 쓰는 중 등)
     hotkey_error: Option<String>,
 }
@@ -93,6 +96,7 @@ fn confirm(state: State<AppState>, intent: String) -> Reply {
 #[tauri::command]
 fn info(app: AppHandle, state: State<AppState>) -> Info {
     let a = &state.assistant;
+    let auto_train_status = arcana_skills::autotrain::status_line(a);
     let c = a.config.read().unwrap();
     Info {
         name: c.name.clone(),
@@ -111,6 +115,9 @@ fn info(app: AppHandle, state: State<AppState>) -> Info {
         container_mb: c.container_mb,
         hotkey: c.hotkey.clone(),
         hotkey_enabled: c.hotkey_enabled,
+        auto_train: c.auto_train,
+        auto_train_idle_min: c.auto_train_idle_min,
+        auto_train_status,
         hotkey_error: state.hotkey_error.lock().unwrap().clone(),
     }
 }
@@ -127,6 +134,8 @@ fn set_value(app: AppHandle, state: State<AppState>, key: String, value: serde_j
             "memory_enabled" => c.memory_enabled = value.as_bool().ok_or("참/거짓이 필요합니다")?,
             "container_enabled" => c.container_enabled = value.as_bool().ok_or("참/거짓이 필요합니다")?,
             "hotkey_enabled" => c.hotkey_enabled = value.as_bool().ok_or("참/거짓이 필요합니다")?,
+            "auto_train" => c.auto_train = value.as_bool().ok_or("참/거짓이 필요합니다")?,
+            "auto_train_idle_min" => c.auto_train_idle_min = value.as_u64().ok_or("숫자가 필요합니다")?.clamp(1, 240),
             "hotkey" => {
                 let k = value.as_str().ok_or("글자가 필요합니다")?.trim().to_string();
                 k.parse::<Shortcut>().map_err(|_| format!("'{k}'은(는) 단축키로 쓸 수 없습니다"))?;
@@ -397,6 +406,7 @@ fn main() {
                 .map(|t| Arc::new(t) as Arc<dyn arcana_core::Talker>);
             let assistant = Arc::new(Assistant::new(Box::new(brain), talker, dir, events));
             assistant.start_self_study();
+            assistant.start_auto_train();
             app.manage(AppState {
                 assistant,
                 update: Mutex::new(None),
