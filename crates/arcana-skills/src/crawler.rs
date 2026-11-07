@@ -18,6 +18,8 @@ pub struct Robots {
     pub crawl_delay: Option<u64>,
     /// robots.txt 가 401/403 이면 전부 금지
     pub deny_all: bool,
+    /// robots.txt 에 적힌 사이트맵 주소들
+    pub sitemaps: Vec<String>,
 }
 
 impl Robots {
@@ -37,12 +39,17 @@ impl Robots {
         let agent = agent.to_lowercase();
         let mut groups: Vec<(Vec<String>, Robots)> = Vec::new();
         let mut in_rules = false;
+        let mut sitemaps = Vec::new();
         for raw in txt.lines() {
             let line = raw.split('#').next().unwrap_or("").trim();
             let Some((k, v)) = line.split_once(':') else {
                 continue;
             };
             let (k, v) = (k.trim().to_lowercase(), v.trim().to_string());
+            if k == "sitemap" {
+                sitemaps.push(v.clone());
+                continue;
+            }
             match k.as_str() {
                 "user-agent" => {
                     if in_rules || groups.is_empty() {
@@ -71,7 +78,9 @@ impl Robots {
         let star = groups
             .iter()
             .find(|(names, _)| names.iter().any(|n| n == "*"));
-        mine.or(star).map(|(_, r)| r.clone()).unwrap_or_default()
+        let mut r = mine.or(star).map(|(_, r)| r.clone()).unwrap_or_default();
+        r.sitemaps = sitemaps;
+        r
     }
 
     /// 경로(+쿼리)가 허용되는지. 가장 길게 맞는 규칙이 이김, 같으면 허용 우선
@@ -210,6 +219,8 @@ pub struct Page {
     pub headings: Vec<String>,
     /// 본문 전체 (메뉴·광고·스크립트 빼고). 요약하지 않음
     pub text: String,
+    /// 내용이 아직 안 그려진 "로딩 중" 페이지로 보임 (자바스크립트로 나중에 채우는 사이트)
+    pub loading: bool,
     /// <meta name="robots" content="noindex"> 면 저장 안 함
     pub noindex: bool,
     pub nofollow: bool,
@@ -221,6 +232,64 @@ fn sel(s: &str) -> Selector {
 
 fn clean(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// "로딩 중…", "자바스크립트를 켜 주세요" 처럼 내용이 아직 없는 페이지인지
+fn looks_loading(doc: &Html, text: &str) -> bool {
+    if text.chars().count() >= 300 {
+        return false;
+    }
+    let body = doc.select(&sel("body")).next().map(|b| b.text().collect::<String>().to_lowercase()).unwrap_or_default();
+    let marks = ["loading", "로딩", "불러오는 중", "잠시만 기다", "please wait", "enable javascript", "javascript is required", "자바스크립트를 활성화", "javascript를 활성화", "just a moment", "checking your browser"];
+    let empty_root = doc.select(&sel("#root, #app, #__next, #__nuxt, [data-reactroot]")).any(|e| e.text().collect::<String>().trim().len() < 20);
+    marks.iter().any(|m| body.contains(m)) || empty_root
+}
+
+/// 페이지에 숨어 있는 데이터에서 글 꺼내기 (JSON-LD articleBody·description, Next.js __NEXT_DATA__ 의 긴 문장들)
+fn embedded_text(doc: &Html) -> String {
+    let mut out: Vec<String> = Vec::new();
+    fn walk(v: &serde_json::Value, out: &mut Vec<String>, depth: usize) {
+        if depth > 12 || out.len() > 400 {
+            return;
+        }
+        match v {
+            serde_json::Value::String(s) => {
+                let t = s.trim();
+                // 문장처럼 보이는 긴 글만 (주소·코드·짧은 이름 제외)
+                if t.chars().count() >= 40 && t.contains(' ') && !t.starts_with("http") && !t.contains('{') && !t.contains("<") {
+                    out.push(clean(t));
+                }
+            }
+            serde_json::Value::Array(a) => a.iter().for_each(|x| walk(x, out, depth + 1)),
+            serde_json::Value::Object(o) => o.values().for_each(|x| walk(x, out, depth + 1)),
+            _ => {}
+        }
+    }
+    for sc in doc.select(&sel("script[type=\"application/ld+json\"], script#__NEXT_DATA__, script#__NUXT_DATA__")) {
+        let raw = sc.text().collect::<String>();
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
+            walk(&v, &mut out, 0);
+        }
+    }
+    out.dedup();
+    let mut text = out.join("\n");
+    if text.chars().count() > 200_000 {
+        text = text.chars().take(200_000).collect();
+    }
+    text
+}
+
+/// 사이트맵(sitemap.xml)에서 주소들 꺼내기. (페이지 주소들, 하위 사이트맵 주소들)
+pub fn parse_sitemap(xml: &str) -> (Vec<String>, Vec<String>) {
+    let re = regex::Regex::new(r"<loc>\s*(?:<!\[CDATA\[)?\s*([^<\]\s]+)").unwrap();
+    let is_index = xml.contains("<sitemapindex");
+    let locs: Vec<String> = re.captures_iter(xml).map(|c| c[1].replace("&amp;", "&")).collect();
+    if is_index {
+        (vec![], locs)
+    } else {
+        let (maps, pages): (Vec<String>, Vec<String>) = locs.into_iter().partition(|l| l.ends_with(".xml") || l.ends_with(".xml.gz"));
+        (pages, maps)
+    }
 }
 
 /// 본문 전체 뽑기: article/main 이 있으면 그 안, 없으면 body. 메뉴·머리말·꼬리말·옆칸·스크립트는 뺌
@@ -333,7 +402,8 @@ pub fn parse_html(html: &str, base: &Url) -> Page {
         .unwrap_or_default();
     let mut links = Vec::new();
     let mut link_texts = Vec::new();
-    if !robots.contains("nofollow") {
+    // 링크는 항상 모아 둠 (nofollow 를 지킬지는 읽는 쪽에서 정함)
+    {
         for a in doc.select(&sel("a[href]")) {
             if a.value()
                 .attr("rel")
@@ -353,8 +423,21 @@ pub fn parse_html(html: &str, base: &Url) -> Page {
         .filter(|t| (2..60).contains(&t.chars().count()))
         .take(8)
         .collect();
-    let text = main_text(&doc);
+    let mut text = main_text(&doc);
+    // 화면을 자바스크립트로 나중에 그리는 사이트: 처음 받은 HTML 엔 "로딩 중"만 있음
+    //  → 페이지에 같이 들어 있는 데이터(JSON-LD, Next.js 데이터, 설명 메타)에서 글을 꺼냄
+    let loading = looks_loading(&doc, &text);
+    if text.chars().count() < 200 {
+        let extra = embedded_text(&doc);
+        if extra.chars().count() > text.chars().count() {
+            text = extra;
+            if summary.chars().count() < 40 {
+                summary = text.chars().take(400).collect();
+            }
+        }
+    }
     Page {
+        loading,
         text,
         link_texts,
         headings,
@@ -440,7 +523,7 @@ mod tests {
         assert!(!p.noindex);
 
         let p2 = parse_html("<html><head><meta name=robots content='noindex,nofollow'><title>x</title></head><body><p>본문입니다 본문입니다 본문입니다 본문입니다 본문입니다 본문입니다</p><a href='/a'>a</a></body></html>", &base);
-        assert!(p2.noindex && p2.links.is_empty());
+        assert!(p2.noindex && p2.nofollow && !p2.links.is_empty()); // 링크는 모아 두고, 따를지는 읽는 쪽이 정함
         assert!(p2.summary.contains("본문입니다"));
     }
 }

@@ -176,7 +176,7 @@ impl CrawlSettings {
 fn item_host(item: &str) -> String {
     match target(item) {
         Target::Wiki(lang, _) => format!("{lang}.wikipedia.org"),
-        Target::Web(url) => url::Url::parse(&url).ok().and_then(|u| u.host_str().map(|h| h.to_lowercase())).unwrap_or_default(),
+        Target::Web(url) | Target::Refresh(url) => url::Url::parse(&url).ok().and_then(|u| u.host_str().map(|h| h.to_lowercase())).unwrap_or_default(),
     }
 }
 
@@ -211,9 +211,14 @@ pub fn wiki_item_of(url: &str) -> Option<String> {
 enum Target {
     Wiki(String, String),
     Web(String),
+    /// 예전에 읽은 페이지 다시 확인 (사이트 내용이 바뀌었을 수 있음)
+    Refresh(String),
 }
 
 fn target(s: &str) -> Target {
+    if let Some(u) = s.strip_prefix("refresh:") {
+        return Target::Refresh(u.into());
+    }
     if s.starts_with("http://") || s.starts_with("https://") {
         return Target::Web(s.into());
     }
@@ -298,6 +303,16 @@ pub struct Knowledge {
     site_today: Mutex<(String, HashMap<String, usize>)>,
     /// 사이트별 연속 실패 횟수 (3번이면 그날은 건너뜀)
     site_fail: Mutex<HashMap<String, usize>>,
+    /// 사이트별 마지막 문제 ("접근 거부(봇 차단)" 등) — 한 사이트만 공부할 때 이유를 알려 주려고
+    site_problem: Mutex<HashMap<String, String>>,
+    /// "로딩 중" 페이지를 몇 번 다시 시도했는지
+    loading_tries: Mutex<HashMap<String, u8>>,
+    /// 사이트맵을 이미 훑은 사이트 (하루에 한 번)
+    sitemap_done: Mutex<HashMap<String, String>>,
+    /// 페이지 내용 지문 (주소 → 해시). 다시 읽었을 때 바뀌었는지 보려고. page_hashes.json
+    page_hash: Mutex<HashMap<String, u64>>,
+    /// 다시 확인한 시각 (같은 페이지를 하루에 여러 번 확인하지 않게)
+    refreshed: Mutex<HashMap<String, Instant>>,
     /// 여러 사이트에 걸친 연속 연결 실패 (5번이면 진짜 인터넷 문제로 보고 쉼)
     net_fail_streak: Mutex<usize>,
     /// /Start 할 때 쉬고 있던 공부를 바로 깨우는 신호
@@ -433,6 +448,11 @@ impl Knowledge {
             site_last: Mutex::new(HashMap::new()),
             site_today: Mutex::new((String::new(), HashMap::new())),
             site_fail: Mutex::new(HashMap::new()),
+            site_problem: Mutex::new(HashMap::new()),
+            loading_tries: Mutex::new(HashMap::new()),
+            refreshed: Mutex::new(HashMap::new()),
+            sitemap_done: Mutex::new(HashMap::new()),
+            page_hash: Mutex::new(std::fs::read_to_string(dir.join("page_hashes.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()),
             net_fail_streak: Mutex::new(0),
             wake: std::sync::atomic::AtomicU64::new(0),
             dir,
@@ -634,6 +654,111 @@ impl Knowledge {
         self.save_frontier();
     }
 
+    /// 한 사이트만 공부할 때: 대기열이 가득 차 있어도 맨 앞에 넣음 (넘치면 맨 뒤 것을 버림)
+    fn push_targets_front(&self, items: Vec<String>) {
+        let mut seen = self.seen.lock().unwrap();
+        let mut f = self.frontier.lock().unwrap();
+        for t in items.into_iter().rev() {
+            if seen.insert(t.clone()) {
+                f.queue.push_front(t);
+                while f.queue.len() > FRONTIER_MAX {
+                    f.queue.pop_back();
+                }
+            }
+        }
+        drop(f);
+        drop(seen);
+        self.save_frontier();
+    }
+
+    fn save_hashes(&self) {
+        let h = self.page_hash.lock().unwrap();
+        let _ = std::fs::write(self.dir.join("page_hashes.json"), serde_json::to_string(&*h).unwrap_or_default());
+    }
+
+    /// 한 사이트만 공부하는데 읽을 링크가 떨어졌을 때:
+    ///  1) 사이트맵(sitemap.xml)에서 아직 안 읽은 페이지들을 찾고 (하루 한 번)
+    ///  2) 그래도 없으면 예전에 읽은 페이지를 다시 확인 (하루 지난 것, 내용이 바뀌었을 수 있음)
+    /// 새로 넣은 개수를 돌려줌
+    fn refill_site(&self, site: &str, s: &CrawlSettings) -> usize {
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let checked = self.sitemap_done.lock().unwrap().get(site) == Some(&today);
+        if !checked {
+            self.sitemap_done.lock().unwrap().insert(site.to_string(), today.clone());
+            // 그 사이트에서 읽은 주소가 있으면 거기서 (http/포트까지 맞게), 없으면 https://사이트/
+            let base = self
+                .docs
+                .read()
+                .unwrap()
+                .iter()
+                .rev()
+                .filter_map(|d| Url::parse(&d.url).ok())
+                .find(|u| host_matches(u.host_str().unwrap_or(""), site))
+                .and_then(|u| u.join("/").ok())
+                .map(|u| u.to_string())
+                .unwrap_or_else(|| format!("https://{site}/"));
+            let mut maps: Vec<String> = Url::parse(&base).map(|u| self.robots_for(&u).sitemaps).unwrap_or_default();
+            maps.extend([format!("{base}sitemap.xml"), format!("{base}sitemap_index.xml")]);
+            let mut pages = Vec::new();
+            let mut fetched = 0;
+            while let Some(m) = maps.pop() {
+                if fetched >= 12 || pages.len() >= 2000 {
+                    break;
+                }
+                fetched += 1;
+                let Ok(resp) = net::get(&m, &[]) else { continue };
+                let mut xml = String::new();
+                let _ = std::io::Read::read_to_string(&mut std::io::Read::take(resp.into_reader(), 8 * 1024 * 1024), &mut xml);
+                let (p, sub) = crawler::parse_sitemap(&xml);
+                pages.extend(p);
+                maps.extend(sub);
+            }
+            let items: Vec<String> = pages
+                .into_iter()
+                .filter_map(|p| Url::parse(&p).ok())
+                .filter(|u| host_matches(u.host_str().unwrap_or(""), site) && crawler::url_ok(u, &s.blocked_domains))
+                .map(|u| crawler::canonical(&u))
+                .take(1000)
+                .collect();
+            let before = self.frontier.lock().unwrap().queue.len();
+            self.push_targets_front(items);
+            let added = self.frontier.lock().unwrap().queue.len().saturating_sub(before);
+            if added > 0 {
+                return added;
+            }
+        }
+        // 예전에 읽은 페이지 다시 확인 (마지막으로 본 지 하루 넘은 것, 최대 30개)
+        let cutoff = (chrono::Local::now() - chrono::Duration::hours(24)).format("%Y-%m-%d %H:%M").to_string();
+        let recent = self.refreshed.lock().unwrap().clone();
+        let olds: Vec<String> = self
+            .docs
+            .read()
+            .unwrap()
+            .iter()
+            .filter(|d| d.learned_at < cutoff && Url::parse(&d.url).map_or(false, |u| host_matches(u.host_str().unwrap_or(""), site)))
+            .filter(|d| recent.get(&d.url).map_or(true, |t| t.elapsed() > Duration::from_secs(24 * 3600)))
+            .map(|d| format!("refresh:{}", d.url))
+            .take(30)
+            .collect();
+        let mut f = self.frontier.lock().unwrap();
+        let n = olds.iter().filter(|o| !f.queue.contains(o)).count();
+        for o in olds {
+            if !f.queue.contains(&o) {
+                f.queue.push_back(o);
+            }
+        }
+        n
+    }
+
+    fn note_problem(&self, host: &str, why: impl Into<String>) {
+        self.site_problem.lock().unwrap().insert(host.to_string(), why.into());
+    }
+
+    /// 그 사이트에서 마지막으로 생긴 문제
+    pub fn site_problem(&self, site: &str) -> Option<String> {
+        self.site_problem.lock().unwrap().iter().find(|(h, _)| host_matches(h.split(':').next().unwrap_or(h), site)).map(|(_, w)| w.clone())
+    }
+
     fn enqueue_wiki_links(&self, lang: &str, title: &str, explore_web: bool, blocked: &[String]) {
         let links = self.wiki_links(lang, title, false);
         let step = (links.len() / 10).max(1);
@@ -689,6 +814,12 @@ impl Knowledge {
 
     /// 이 주소부터 공부 (대기열 맨 앞에)
     pub fn study_first(&self, url: &str) {
+        // 다시 해 보라고 한 거니까, 오늘 실패 기록은 지움
+        if let Ok(u) = url::Url::parse(url) {
+            let h = Self::host_of(&u);
+            self.site_fail.lock().unwrap().remove(&h);
+            self.site_problem.lock().unwrap().remove(&h);
+        }
         let is_wiki_site = site_of(url).as_deref() == Some("wikipedia.org");
         if is_wiki_site && wiki_item_of(url).is_none() {
             // 위키백과 첫 화면 같은 주소: 그 언어 위키의 문서들부터
@@ -815,7 +946,7 @@ impl Knowledge {
         r
     }
 
-    fn crawl(&self, raw: &str, s: &CrawlSettings) -> Result<Step, String> {
+    fn crawl(&self, raw: &str, s: &CrawlSettings, refresh: bool) -> Result<Step, String> {
         let Ok(u) = Url::parse(raw) else {
             return Ok(Step::Skip);
         };
@@ -875,12 +1006,19 @@ impl Knowledge {
                 self.site_fail.lock().unwrap().remove(&host);
                 r
             }
-            Err(ureq::Error::Status(_, _)) => {
+            Err(ureq::Error::Status(code, _)) => {
                 *self.net_fail_streak.lock().unwrap() = 0; // 서버가 대답은 했으니 인터넷은 됨
+                self.note_problem(&host, match code {
+                    403 | 401 => format!("사이트가 접근을 거부했습니다 (HTTP {code}, 자동 수집 차단)"),
+                    429 => "너무 자주 읽어서 사이트가 잠시 막았습니다 (HTTP 429)".to_string(),
+                    404 => "없는 페이지입니다 (HTTP 404)".to_string(),
+                    _ => format!("사이트 오류 (HTTP {code})"),
+                });
                 return Ok(Step::Skip);
             }
             Err(e) => {
                 // 이 페이지·사이트만의 문제(리다이렉트 반복, 잘못된 응답, 꺼진 서버 등)는 건너뛰고 계속
+                self.note_problem(&host, net::describe(&e));
                 *self
                     .site_fail
                     .lock()
@@ -897,6 +1035,7 @@ impl Knowledge {
             }
         };
         if !resp.content_type().contains("html") {
+            self.note_problem(&host, "웹 문서(HTML)가 아닙니다");
             return Ok(Step::Skip);
         }
         let final_url = Url::parse(resp.get_url()).unwrap_or(u);
@@ -910,9 +1049,56 @@ impl Knowledge {
             return Ok(Step::Skip);
         }
         let page = crawler::parse_html(&html, &final_url);
+        // 아직 "로딩 중"인 페이지: 조금 뒤에 다시 (최대 2번), 그래도 비어 있으면 숨은 데이터로 읽은 만큼만
+        if page.loading && page.text.chars().count() < 200 {
+            let tries = {
+                let mut t = self.loading_tries.lock().unwrap();
+                let n = t.entry(raw.to_string()).or_insert(0);
+                *n += 1;
+                *n
+            };
+            if tries <= 2 {
+                self.frontier.lock().unwrap().queue.push_back(raw.to_string());
+                return Ok(Step::Skip);
+            }
+            self.note_problem(&host, "페이지가 '로딩 중'에서 바뀌지 않습니다 (자바스크립트로 화면을 그리는 사이트)");
+        }
+        // 다시 확인하러 온 페이지: 내용이 바뀌었으면 새 내용 저장
+        if refresh {
+            self.refreshed.lock().unwrap().insert(raw.to_string(), Instant::now());
+            let h = {
+                use std::hash::{Hash, Hasher};
+                let mut x = std::collections::hash_map::DefaultHasher::new();
+                page.text.hash(&mut x);
+                x.finish()
+            };
+            let url = crawler::canonical(&final_url);
+            let old = self.page_hash.lock().unwrap().insert(url.clone(), h);
+            self.save_hashes();
+            if old.is_some() && old != Some(h) && page.text.chars().count() >= 200 {
+                self.save_text(&page.title, &url, "웹", &page.text);
+                return Ok(Step::Learned(format!("{} (바뀐 내용)", page.title), host));
+            }
+            return Ok(Step::Skip);
+        }
 
-        // 링크: 같은 사이트 3개 + 다른 사이트 5개 (한쪽으로 안 쏠리게)
-        if !page.nofollow {
+        let only_here = s.only.as_deref().map_or(false, |site| host_matches(host.split(':').next().unwrap_or(&host), site));
+        if only_here && (!page.nofollow || !s.obey_robots) {
+            // 한 사이트만 공부: 그 사이트 링크를 많이(최대 60개), 맨 앞에 넣음
+            let mut items: Vec<String> = page
+                .links
+                .iter()
+                .filter(|l| crawler::url_ok(l, &s.blocked_domains) && Self::host_of(l) == host)
+                .map(crawler::canonical)
+                .collect();
+            items.dedup();
+            items.truncate(60);
+            if items.is_empty() && page.text.chars().count() < 50 {
+                self.note_problem(&host, "페이지에서 내용·링크를 찾지 못했습니다 (자바스크립트로 화면을 그리는 사이트일 수 있습니다)");
+            }
+            self.push_targets_front(items);
+        } else if !page.nofollow || !s.obey_robots {
+            // 링크: 같은 사이트 3개 + 다른 사이트 5개 (한쪽으로 안 쏠리게)
             let (mut same, mut other) = (0, 0);
             let mut items = Vec::new();
             for l in page
@@ -951,6 +1137,13 @@ impl Knowledge {
         }
         let url = crawler::canonical(&final_url);
         self.save_text(&page.title, &url, "웹", &page.text);
+        {
+            use std::hash::{Hash, Hasher};
+            let mut x = std::collections::hash_map::DefaultHasher::new();
+            page.text.hash(&mut x);
+            self.page_hash.lock().unwrap().insert(url.clone(), x.finish());
+            self.save_hashes();
+        }
         let doc = self.add(Doc {
             title: page.title,
             summary: page.summary,
@@ -1368,6 +1561,14 @@ impl Knowledge {
                         continue;
                     }
                 }
+                // 다른 사이트만 공부할 때: 사이트맵 → 다시 확인
+                if postponed == 0 {
+                    if let Some(site) = s.only.as_deref().filter(|x| *x != "wikipedia.org") {
+                        if self.refill_site(site, s) > 0 {
+                            continue;
+                        }
+                    }
+                }
                 return Ok(if postponed > 0 {
                     Studied::Wait
                 } else {
@@ -1399,8 +1600,9 @@ impl Knowledge {
                     if !s.explore_web {
                         continue;
                     }
-                    self.crawl(&url, s)
+                    self.crawl(&url, s, false)
                 }
+                Target::Refresh(url) => self.crawl(&url, s, true),
             };
             match step {
                 Ok(Step::Learned(title, site)) => {
@@ -1449,7 +1651,10 @@ impl Knowledge {
                     Ok(Studied::Idle) => {
                         events(Event::StudyLog {
                             text: match &settings.only {
-                                Some(site) => format!("{site} 에서 더 읽을 곳을 찾지 못했습니다. (사이트가 수집을 막았거나 다 읽음) 10분 뒤 다시 보겠습니다. 다른 링크로 /Start only 를 하시거나 /Start 로 어디서든 공부하게 할 수 있습니다."),
+                                Some(site) => match me.site_problem(site) {
+                                    Some(why) => format!("{site} 에서 더 읽을 곳을 찾지 못했습니다. 이유: {why}. 10분 뒤 다시 보겠습니다. 다른 링크로 /Start only 를 하시거나 /Start 로 어디서든 공부하게 할 수 있습니다."),
+                                    None => format!("{site} 에서 더 읽을 곳을 찾지 못했습니다. (읽을 만한 새 페이지가 없음) 10분 뒤 다시 보겠습니다. 다른 링크로 /Start only 를 하시거나 /Start 로 어디서든 공부하게 할 수 있습니다."),
+                                },
                                 None => "읽을 곳이 없거나 오늘 공부량을 다 채웠습니다. 10분 뒤 다시 시작하겠습니다.".into(),
                             },
                         });
