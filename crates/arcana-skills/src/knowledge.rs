@@ -297,6 +297,8 @@ pub struct Knowledge {
     site_fail: Mutex<HashMap<String, usize>>,
     /// 여러 사이트에 걸친 연속 연결 실패 (5번이면 진짜 인터넷 문제로 보고 쉼)
     net_fail_streak: Mutex<usize>,
+    /// /Start 할 때 쉬고 있던 공부를 바로 깨우는 신호
+    wake: std::sync::atomic::AtomicU64,
     docs: RwLock<Vec<Doc>>,
     index: RwLock<HashMap<String, usize>>,
     frontier: Mutex<Frontier>,
@@ -429,6 +431,7 @@ impl Knowledge {
             site_today: Mutex::new((String::new(), HashMap::new())),
             site_fail: Mutex::new(HashMap::new()),
             net_fail_streak: Mutex::new(0),
+            wake: std::sync::atomic::AtomicU64::new(0),
             dir,
             docs: RwLock::new(docs),
             index: RwLock::new(index),
@@ -660,14 +663,50 @@ impl Knowledge {
         self.push_targets(items);
     }
 
+    /// 쉬고 있던 공부를 바로 다시 시작 (/Start)
+    pub fn wake(&self) {
+        self.wake.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn wake_count(&self) -> u64 {
+        self.wake.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// 위키백과 아무 문서 n개 (위키백과에서만 공부할 때 읽을 게 떨어지면)
+    fn random_wiki(&self, lang: &str, n: usize) -> Vec<String> {
+        let url = format!("{}/w/api.php?action=query&list=random&rnnamespace=0&rnlimit={n}&format=json", Self::wiki(lang));
+        self.get_json(&url)
+            .ok()
+            .and_then(|v| v["query"]["random"].as_array().cloned())
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|r| r["title"].as_str().map(|t| wiki_key(lang, t)))
+            .collect()
+    }
+
     /// 이 주소부터 공부 (대기열 맨 앞에)
     pub fn study_first(&self, url: &str) {
+        let is_wiki_site = site_of(url).as_deref() == Some("wikipedia.org");
+        if is_wiki_site && wiki_item_of(url).is_none() {
+            // 위키백과 첫 화면 같은 주소: 그 언어 위키의 문서들부터
+            let lang = url::Url::parse(url).ok().and_then(|u| u.host_str().and_then(|h| h.strip_suffix(".wikipedia.org")).map(|l| l.trim_start_matches("m.").to_string())).unwrap_or_else(|| "ko".into());
+            let items = self.random_wiki(&lang, 20);
+            let mut f = self.frontier.lock().unwrap();
+            for it in items.into_iter().rev() {
+                f.queue.push_front(it);
+            }
+            drop(f);
+            self.save_frontier();
+            self.wake();
+            return;
+        }
         let item = wiki_item_of(url).unwrap_or_else(|| url::Url::parse(url).map(|u| crawler::canonical(&u)).unwrap_or_else(|_| url.to_string()));
         let mut f = self.frontier.lock().unwrap();
         f.queue.retain(|x| x != &item);
         f.queue.push_front(item);
         drop(f);
         self.save_frontier();
+        self.wake();
     }
 
     fn save_frontier(&self) {
@@ -1316,6 +1355,18 @@ impl Knowledge {
                 }
             };
             let Some(item) = next else {
+                // 위키백과에서만 공부하는데 읽을 문서가 떨어졌으면 아무 문서나 더 가져옴
+                if postponed == 0 && s.only.as_deref() == Some("wikipedia.org") && !s.wiki_langs.is_empty() {
+                    let mut added = 0;
+                    for lang in &s.wiki_langs {
+                        let items = self.random_wiki(lang, 10);
+                        added += items.len();
+                        self.frontier.lock().unwrap().queue.extend(items);
+                    }
+                    if added > 0 {
+                        continue;
+                    }
+                }
                 return Ok(if postponed > 0 {
                     Studied::Wait
                 } else {
@@ -1396,8 +1447,10 @@ impl Knowledge {
                     Ok(Studied::Wait) => 1,
                     Ok(Studied::Idle) => {
                         events(Event::StudyLog {
-                            text: "읽을 곳이 없거나 오늘 공부량을 다 채웠습니다. 잠시 쉬겠습니다."
-                                .into(),
+                            text: match &settings.only {
+                                Some(site) => format!("{site} 에서 더 읽을 곳을 찾지 못했습니다. (사이트가 수집을 막았거나 다 읽음) 10분 뒤 다시 보겠습니다. 다른 링크로 /Start only 를 하시거나 /Start 로 어디서든 공부하게 할 수 있습니다."),
+                                None => "읽을 곳이 없거나 오늘 공부량을 다 채웠습니다. 10분 뒤 다시 시작하겠습니다.".into(),
+                            },
                         });
                         600
                     }
@@ -1415,8 +1468,10 @@ impl Knowledge {
                     });
                 }
                 last_q = q;
+                let woke = me.wake_count();
                 for _ in 0..wait {
-                    if !config.read().unwrap().self_study {
+                    // 멈추거나, 새로 /Start 하면 기다리지 않고 바로
+                    if !config.read().unwrap().self_study || me.wake_count() != woke {
                         break;
                     }
                     std::thread::sleep(Duration::from_secs(1));

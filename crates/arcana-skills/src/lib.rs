@@ -459,6 +459,7 @@ impl Assistant {
                         k.study_first(&link);
                     }
                     set_running(true);
+                    k.wake(); // 쉬는 중이었으면 바로 다시 시작
                     let site = self.config.read().unwrap().study_only.clone();
                     if only {
                         lines.push(format!("{site} 에서만 공부하겠습니다. {link} 부터 읽고, 그 사이트 안의 링크만 따라갑니다."));

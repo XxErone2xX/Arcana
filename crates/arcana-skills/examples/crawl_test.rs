@@ -19,7 +19,7 @@ fn main() {
         blocked_domains: vec![],
         site_delay_secs: 3,
         site_daily_limit: 100,
-        only: None,
+        only: std::env::args().nth(2), // 둘째 인자: 이 사이트에서만
     };
     for i in 0..12 {
         match k.study_step(&s) {
