@@ -65,7 +65,7 @@ function mock() {
         data_dir: "-", missing_skills: [],
         capabilities: ["프로그램 켜기/끄기 — \"디코 켜줘\"", "타이머 — \"라면 3분 타이머\""],
         think_level: 3, memory_enabled: true, container_enabled: true, container_mb: 100,
-        hotkey: "Shift+A", hotkey_enabled: true, hotkey_error: null,
+        hotkey: "Alt+Shift+A", hotkey_enabled: true, hotkey_error: null,
       };
     },
     async setValue(k, v) { (await this.info())[k] = v; },

@@ -47,7 +47,7 @@ pub struct Config {
     pub container_enabled: bool,
     /// 컨테이너 메모리 최대 크기 (MB, 10 ~ 10240)
     pub container_mb: u64,
-    /// 빠른 호출 단축키 (어느 화면에서든 Arcana 부르기). 예: "Shift+A", "Ctrl+Space", "Alt+Q"
+    /// 빠른 호출 단축키 (어느 화면에서든 Arcana 부르기). 예: "Alt+Shift+A", "Ctrl+Space", "Alt+Q"
     pub hotkey: String,
     pub hotkey_enabled: bool,
     /// 학습 도구 폴더 (Arcana 레포의 training 폴더). /Train 이 여기 있는 bat 을 실행
@@ -162,7 +162,7 @@ impl Default for Config {
             ),
         );
         Self {
-            version: 3,
+            version: 4,
             name: "Arcana".into(),
             threshold: 0.55,
             auto_update: true,
@@ -184,7 +184,7 @@ impl Default for Config {
             memory_enabled: true,
             container_enabled: true,
             container_mb: 100,
-            hotkey: "Shift+A".into(),
+            hotkey: "Alt+Shift+A".into(),
             hotkey_enabled: true,
             apps,
         }
@@ -235,9 +235,17 @@ impl Config {
                         c.memory_enabled = true;
                         c.container_enabled = true;
                         c.container_mb = 100;
-                        c.hotkey = "Shift+A".into();
+                        c.hotkey = "Alt+Shift+A".into();
                         c.hotkey_enabled = true;
                         c.version = 3;
+                        c.save(dir);
+                    }
+                    // v3 → v4: 빠른 호출 기본 단축키 Shift+A → Alt+Shift+A (대문자 A 입력과 안 겹치게)
+                    if c.version < 4 {
+                        if c.hotkey == "Shift+A" {
+                            c.hotkey = "Alt+Shift+A".into();
+                        }
+                        c.version = 4;
                         c.save(dir);
                     }
                     c

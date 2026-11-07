@@ -193,7 +193,7 @@ fn container_clear(state: State<AppState>) {
     state.assistant.container.clear()
 }
 
-// ── 빠른 호출 (Shift+A) ──
+// ── 빠른 호출 (기본 Alt+Shift+A) ──
 #[tauri::command]
 fn quick_hide(app: AppHandle) {
     if let Some(w) = app.get_webview_window("quick") {
@@ -207,7 +207,7 @@ fn quick_hide(app: AppHandle) {
 }
 
 /// 단축키는 키 입력을 가로채므로, Arcana 창에서 글을 쓰는 동안에는 잠깐 풀어 둠
-/// (예: Shift+A 라면 Arcana 창 안에서는 대문자 A 가 그대로 입력되게)
+/// 
 fn pause_hotkey(app: &AppHandle) {
     let _ = app.global_shortcut().unregister_all();
 }
@@ -374,7 +374,7 @@ fn main() {
                 update: Mutex::new(None),
                 hotkey_error: Mutex::new(None),
             });
-            // 빠른 호출 단축키 (기본 Shift+A, 설정에서 변경)
+            // 빠른 호출 단축키 (기본 Alt+Shift+A, 설정에서 변경)
             app.handle().plugin(
                 tauri_plugin_global_shortcut::Builder::new()
                     .with_handler(|app, _sc, e| {
