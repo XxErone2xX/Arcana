@@ -61,8 +61,9 @@ fn pick<'a>(opts: &[&'a str]) -> &'a str {
 /// PrimeThink 가 "이 대답이면 완벽하다"고 인정하는 기준
 const PERFECT_FLUENCY: f32 = 0.96;
 const PERFECT_MAX_REPEAT: f32 = 0.35;
-/// PrimeThink 최대 생각 시간
-const PRIME_BUDGET: std::time::Duration = std::time::Duration::from_secs(30);
+/// PrimeThink: 시간 제한 없음. 단, 이만큼 연속으로 더 나은 대답을 못 찾으면 지금까지 중 최선으로 대답
+/// (모델 실력상 '완벽' 기준에 도달할 수 없는 말에서 영원히 멈춰 있지 않게)
+const PRIME_PATIENCE: usize = 40;
 
 /// 생각하기: 후보를 여러 개 만들고 채점해서 제일 좋은 걸 고름.
 /// 생각 수치가 높을수록 후보가 많고, 여러 번 다시 생각함 (매번 조금 더 신중하게 = 온도를 낮춤).
@@ -75,11 +76,13 @@ fn deliberate(
     top_k: usize,
     long: bool,
 ) -> Option<String> {
-    let start = std::time::Instant::now();
     let mut best: Option<(f32, String)> = None;
-    for round in 0..think.rounds {
-        let temp = (temp * (1.0 - 0.06 * round as f32)).max(0.3);
-        let n = think.candidates + round * 4;
+    let mut stale = 0usize;
+    let rounds = if think.prime { usize::MAX } else { think.rounds };
+    for round in 0..rounds {
+        let before = best.as_ref().map(|(b, _)| *b);
+        let temp = (temp * (1.0 - 0.06 * round.min(10) as f32)).max(0.3);
+        let n = think.candidates + round.min(8) * 4;
         let cands = t.candidates_scored(&cx.text, n, temp, top_k);
         let mut perfect = false;
         for (c, fluency) in cands {
@@ -104,7 +107,9 @@ fn deliberate(
             cx.emit(crate::Event::Thinking {
                 text: if perfect { format!("PrimeThink · {}번째 생각에서 완벽한 대답을 찾았습니다", round + 1) } else { format!("PrimeThink · {}번째 생각 중…", round + 1) },
             });
-            if perfect || start.elapsed() > PRIME_BUDGET {
+            let improved = best.as_ref().map(|(b, _)| *b) != before;
+            stale = if improved { 0 } else { stale + 1 };
+            if perfect || stale >= PRIME_PATIENCE {
                 break;
             }
         }

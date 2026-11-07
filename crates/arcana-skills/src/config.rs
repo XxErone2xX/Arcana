@@ -205,7 +205,7 @@ impl Config {
             2 => Think { candidates: 4, rounds: 1, prime: false },
             3 => Think { candidates: 8, rounds: 1, prime: false },
             4 => Think { candidates: 16, rounds: 2, prime: false },
-            _ => Think { candidates: 16, rounds: 12, prime: true },
+            _ => Think { candidates: 16, rounds: usize::MAX, prime: true }, // 시간·횟수 제한 없음
         }
     }
 
