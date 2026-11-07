@@ -43,26 +43,25 @@ struct ChatCase {
     greedy: String,
 }
 
+/// 대화 모델 계산 검사: 학습 안 한 작은 무작위 모델로 Rust = PyTorch 확인 (training/make_test_fixture.py)
 #[test]
 fn chat_matches_pytorch() {
-    let talker = builtin::load_chat().expect("대화 모델 로드");
+    let talker = arcana_core::ArcanaChat::from_bytes(
+        include_bytes!("fixtures/chat-test.safetensors"),
+        include_str!("fixtures/chat-test.json"),
+    )
+    .expect("테스트 모델 로드");
     let cases: Vec<ChatCase> =
-        serde_json::from_str(include_str!("../../../models/golden-chat.json")).unwrap();
+        serde_json::from_str(include_str!("fixtures/golden-chat.json")).unwrap();
     let mut rng = arcana_core::gpt::Rng::new(1);
-    let mut same = 0;
     for c in &cases {
         let got = talker.generate(&c.text, 0.0, &mut rng);
-        if got == c.greedy {
-            same += 1;
-        } else {
-            eprintln!("다름: {} → rust '{}' / torch '{}'", c.text, got, c.greedy);
-        }
+        assert!(
+            got.starts_with(&c.greedy),
+            "{}: rust '{}' / torch '{}'",
+            c.text,
+            got,
+            c.greedy
+        );
     }
-    // 부동소수점 미세 차이로 가끔 1등 글자가 바뀔 수 있어서 거의 다 맞으면 통과
-    assert!(
-        same * 10 >= cases.len() * 9,
-        "{}/{} 일치",
-        same,
-        cases.len()
-    );
 }

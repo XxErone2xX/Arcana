@@ -165,23 +165,6 @@ fn data_dir(app: &AppHandle) -> PathBuf {
         })
 }
 
-/// 대화 모델 불러오기:
-/// %APPDATA%\Arcana\models\arcana-chat.* 가 있으면 그걸 (그래픽카드로 학습한 큰 모델 등),
-/// 없으면 exe에 내장된 기본 모델. 둘 다 실패하면 대화 없이 명령만 처리.
-fn load_chat(dir: &std::path::Path) -> Option<arcana_core::ArcanaChat> {
-    let m = dir.join("models");
-    if let (Ok(w), Ok(j)) = (
-        std::fs::read(m.join("arcana-chat.safetensors")),
-        std::fs::read_to_string(m.join("arcana-chat.json")),
-    ) {
-        match arcana_core::ArcanaChat::from_bytes(&w, &j) {
-            Ok(t) => return Some(t),
-            Err(e) => eprintln!("외부 대화 모델 로드 실패, 내장 모델 사용: {e}"),
-        }
-    }
-    arcana_core::builtin::load_chat().ok()
-}
-
 fn main() {
     // 업데이트 직후 재시작이면 이전 프로세스가 완전히 꺼질 때까지 잠깐 대기
     if std::env::args().any(|a| a == updater::RESTART_FLAG) {
@@ -209,7 +192,11 @@ fn main() {
             });
             let brain = arcana_core::builtin::load().map_err(|e| e.to_string())?;
             let dir = data_dir(app.handle());
-            let talker = load_chat(&dir).map(|t| Arc::new(t) as Arc<dyn arcana_core::Talker>);
+            // 대화 모델: 사용자가 학습한 것만 (%APPDATA%\\Arcana\\models). 없으면 대화는 검색·질문으로
+            let talker = arcana_skills::load_talker(&dir)
+                .ok()
+                .flatten()
+                .map(|t| Arc::new(t) as Arc<dyn arcana_core::Talker>);
             let assistant = Arc::new(Assistant::new(Box::new(brain), talker, dir, events));
             assistant.start_self_study();
             app.manage(AppState {

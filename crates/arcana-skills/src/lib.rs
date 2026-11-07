@@ -202,10 +202,28 @@ pub fn intent_has_action_words(intent: &str, text: &str) -> bool {
         .all(|group| group.iter().any(|w| t.contains(w)))
 }
 
+/// 사용자가 학습한 대화 모델 (%APPDATA%\Arcana\models\arcana-chat.*). 없으면 Ok(None)
+pub fn load_talker(data_dir: &std::path::Path) -> Result<Option<arcana_core::ArcanaChat>, String> {
+    let m = data_dir.join("models");
+    let (w, j) = (
+        m.join("arcana-chat.safetensors"),
+        m.join("arcana-chat.json"),
+    );
+    if !w.exists() || !j.exists() {
+        return Ok(None);
+    }
+    let weights = std::fs::read(&w).map_err(|e| e.to_string())?;
+    let meta = std::fs::read_to_string(&j).map_err(|e| e.to_string())?;
+    arcana_core::ArcanaChat::from_bytes(&weights, &meta)
+        .map(Some)
+        .map_err(|e| e.to_string())
+}
+
 /// 두뇌 + 스킬 묶음. 앱은 이것만 쓰면 됨.
 pub struct Assistant {
     brain: Box<dyn Brain>,
-    talker: Option<Arc<dyn Talker>>,
+    /// 대화 모델 (/Reload 로 바꿔 끼울 수 있게 RwLock)
+    talker: RwLock<Option<Arc<dyn Talker>>>,
     pub knowledge: Arc<knowledge::Knowledge>,
     skills: Vec<Box<dyn Skill>>,
     route: HashMap<String, usize>,
@@ -225,7 +243,7 @@ impl Assistant {
         let knowledge = knowledge::Knowledge::open(data_dir.join("knowledge"));
         let mut a = Self {
             brain,
-            talker,
+            talker: RwLock::new(talker),
             knowledge,
             skills: vec![],
             route: HashMap::new(),
@@ -253,7 +271,7 @@ impl Assistant {
             config: self.config.clone(),
             data_dir: self.data_dir.clone(),
             events: self.events.clone(),
-            talker: self.talker.clone(),
+            talker: self.talker.read().unwrap().clone(),
             knowledge: Some(self.knowledge.clone()),
         }
     }
@@ -370,6 +388,10 @@ impl Assistant {
                         lines.push(format!("최근에 배운 것: {}", s.recent.join(", ")));
                     }
                 }
+                "reload" | "새로고침" => lines.push(self.reload_talker()),
+                "train" | "학습" => {
+                    lines.extend(self.start_training(rest.trim().trim_matches('"')))
+                }
                 "diag" | "진단" => {
                     lines.push("인터넷 연결을 확인하는 중입니다…".into());
                     lines.extend(net::diagnose());
@@ -403,6 +425,11 @@ impl Assistant {
                     lines.push("/Status 지금까지 배운 것".into());
                     lines.push("/Skip   지금 질문 넘기기".into());
                     lines.push("/Diag   인터넷 연결 진단".into());
+                    lines.push(
+                        "/Train  공부한 문서로 대화 모델 학습 (처음 한 번은 /Train 학습폴더경로)"
+                            .into(),
+                    );
+                    lines.push("/Reload 새로 학습한 대화 모델 바로 적용".into());
                     lines.push("/Teach 말 = 대답   대답 직접 가르치기".into());
                     lines
                         .push("그 외에 입력하시는 말은 제 질문에 대한 대답으로 받겠습니다.".into());
@@ -427,6 +454,58 @@ impl Assistant {
         msg
     }
 
+    /// %APPDATA%\Arcana\models 의 대화 모델 다시 불러오기
+    pub fn reload_talker(&self) -> String {
+        match load_talker(&self.data_dir) {
+            Ok(Some(t)) => {
+                let name = t.name();
+                *self.talker.write().unwrap() = Some(Arc::new(t));
+                format!("새 대화 모델을 적용했습니다. ({name})")
+            }
+            Ok(None) => "아직 학습된 대화 모델이 없습니다. /Train 으로 학습해 주십시오.".into(),
+            Err(e) => format!("대화 모델을 불러오지 못했습니다. {e}"),
+        }
+    }
+
+    /// 학습 창 열기: training 폴더의 공책으로_학습하기.bat 실행
+    fn start_training(&self, path: &str) -> Vec<String> {
+        if !path.is_empty() {
+            let mut c = self.config.write().unwrap();
+            c.training_dir = path.to_string();
+            c.save(&self.data_dir);
+        }
+        let dir = std::path::PathBuf::from(self.config.read().unwrap().training_dir.clone());
+        if dir.as_os_str().is_empty() || !dir.join("pretrain_notes.py").exists() {
+            return vec![
+                "학습 도구가 있는 폴더를 알려 주십시오. (Arcana 레포의 training 폴더)".into(),
+                "예: /Train C:\\Users\\이름\\Arcana\\training".into(),
+                "레포가 없으시면: git clone https://github.com/XxErone2xX/Arcana".into(),
+            ];
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            let r = std::process::Command::new("cmd")
+                .raw_arg(format!(
+                    "/C start \"Arcana 학습\" /D \"{}\" \"공책으로_학습하기.bat\"",
+                    dir.display()
+                ))
+                .spawn();
+            return match r {
+                Ok(_) => vec![
+                    "학습 창을 열었습니다. 공부한 문서로 한국어를 배운 뒤 대화 데이터로 말하는 법을 배웁니다.".into(),
+                    "끝나면 /Reload 를 입력해 주십시오.".into(),
+                ],
+                Err(e) => vec![format!("학습 창을 열지 못했습니다. ({e})")],
+            };
+        }
+        #[cfg(not(windows))]
+        vec![format!(
+            "이 컴퓨터에서는 직접 실행해 주십시오: cd \"{}\" && python pretrain_notes.py",
+            dir.display()
+        )]
+    }
+
     fn emit_question(&self) {
         if let Some(q) = self.knowledge.current_question() {
             (self.events)(Event::Question { text: q.text() });
@@ -449,7 +528,7 @@ impl Assistant {
     }
 
     pub fn talker_name(&self) -> Option<String> {
-        self.talker.as_ref().map(|t| t.name())
+        self.talker.read().unwrap().as_ref().map(|t| t.name())
     }
 
     /// 두뇌는 아는데 스킬이 없는 의도 (개발할 때 확인용)

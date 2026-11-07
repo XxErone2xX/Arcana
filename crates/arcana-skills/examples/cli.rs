@@ -5,9 +5,13 @@ use std::sync::Arc;
 
 fn main() {
     let brain = arcana_core::builtin::load().expect("모델 로드 실패");
-    let dir = std::env::temp_dir().join("arcana-cli");
-    let talker = arcana_core::builtin::load_chat()
+    // ARCANA_DIR 로 데이터 폴더 지정 가능 (대화 모델: 그 안의 models/arcana-chat.*)
+    let dir = std::env::var_os("ARCANA_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::env::temp_dir().join("arcana-cli"));
+    let talker = arcana_skills::load_talker(&dir)
         .ok()
+        .flatten()
         .map(|t| Arc::new(t) as Arc<dyn arcana_core::Talker>);
     let a = Assistant::new(
         Box::new(brain),

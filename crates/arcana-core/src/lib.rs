@@ -466,18 +466,12 @@ impl Talker for ArcanaChat {
     }
 }
 
-/// 앱에 내장된 기본 모델들
+/// 앱에 내장된 기본 모델 (명령 이해). 대화 모델은 내장하지 않고 %APPDATA%\\Arcana\\models 에서 불러옴
 pub mod builtin {
     pub const WEIGHTS: &[u8] = include_bytes!("../../../models/arcana-nlu.safetensors");
     pub const META: &str = include_str!("../../../models/arcana-nlu.json");
-    pub const CHAT_WEIGHTS: &[u8] = include_bytes!("../../../models/arcana-chat.safetensors");
-    pub const CHAT_META: &str = include_str!("../../../models/arcana-chat.json");
 
     pub fn load() -> Result<super::ArcanaNlu, super::Error> {
         super::ArcanaNlu::from_bytes(WEIGHTS, META)
-    }
-
-    pub fn load_chat() -> Result<super::ArcanaChat, super::Error> {
-        super::ArcanaChat::from_bytes(CHAT_WEIGHTS, CHAT_META)
     }
 }

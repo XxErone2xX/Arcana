@@ -97,6 +97,8 @@ attachPalette(input, [
   { name: "/Status", desc: "지금까지 배운 것", icon: ICONS.chart, alias: ["상태"], run: () => submit("/Status") },
   { name: "/Skip", desc: "지금 질문 넘기기", icon: ICONS.skip, alias: ["넘기기"], run: () => submit("/Skip") },
   { name: "/Teach", desc: "대답 가르치기 — /Teach 말 = 대답", icon: ICONS.teach, alias: ["가르치기"], needsArgs: true },
+  { name: "/Train", desc: "공부한 문서로 대화 모델 학습", icon: ICONS.book, alias: ["학습"], run: () => submit("/Train") },
+  { name: "/Reload", desc: "새로 학습한 대화 모델 적용", icon: ICONS.play, alias: ["새로고침"], run: () => submit("/Reload") },
   { name: "/Diag", desc: "인터넷 연결 진단", icon: ICONS.chart, alias: ["진단"], run: () => submit("/Diag") },
   { name: "/Help", desc: "명령어 설명", icon: ICONS.help, alias: ["도움말"], run: () => submit("/Help") },
 ]);

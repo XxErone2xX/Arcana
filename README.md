@@ -52,6 +52,8 @@
 | `/Status` | 지금까지 배운 것 |
 | `/Skip` | 지금 질문 넘기기 |
 | `/Teach 말 = 대답` | 대답 직접 가르치기 |
+| `/Train` | 공부한 문서로 대화 모델 학습 (처음 한 번은 `/Train 학습폴더경로`) |
+| `/Reload` | 새로 학습한 대화 모델 바로 적용 |
 | 그 외 | Arcana의 질문에 대한 대답 |
 
 Arcana가 질문하는 경우:
@@ -96,14 +98,22 @@ Arcana가 질문하는 경우:
 | 부분 | 하는 일 | 구조 | 크기 |
 |---|---|---|---|
 | Arcana 명령 이해 | 어떤 명령인지 + 앱 이름·시간 등 뽑기 | 인코더 (JointBERT 참고) | 약 85만 |
-| Arcana 대화 | 대답을 글자 하나씩 직접 만들어냄 | 디코더 (GPT 계열 참고) | small 약 200만 (내장) |
+| Arcana 대화 | 대답을 글자 하나씩 직접 만들어냄 | 디코더 (GPT 계열 참고) | 직접 학습 (`%APPDATA%\Arcana\models`) |
 
-대화 모델은 사람끼리 나눈 대화 데이터(`training/data/*.jsonl`)로 학습해. 대화 파일은 `convert_dialogue.py`로 넣으면 돼:
+대화 모델은 앱에 내장돼 있지 않고, 직접 학습시켜서 써. 없을 때는 잡담에 대답을 지어내지 않고 인터넷 검색·학습 탭 질문으로 넘어가.
+
+### 공책으로 학습하기
+학습 탭에서 공부한 문서(공책)로 대화 모델을 만들어.
+1. **1단계 사전학습**: 공책의 위키백과 문서로 한국어 문장을 배움 (일반 웹사이트 글은 저작권 때문에 안 씀)
+2. **2단계 대화 학습**: `training/data/*.jsonl` 대화 데이터 + 직접 가르친 대답으로 말하는 법을 배움
+
 ```bash
 cd training
-python convert_dialogue.py 대화.txt      # "A: …" / "B: …" 형식, 빈 줄로 대화 구분 → data/dialogue.jsonl (대답은 합니다체로)
-python train_chat.py                     # data/ 폴더의 jsonl 전부로 학습
+python convert_dialogue.py 대화.txt     # 대화 파일 → data/dialogue.jsonl (대답은 합니다체로)
+공책으로_학습하기.bat                   # 또는 앱 학습 탭에서 /Train → 끝나면 /Reload
 ```
+비서다운 대화 데이터로는 AI Hub의 **민원(콜센터) 질의-응답**, **용도별 목적대화**처럼 공손한 상담 대화를 추천.
+
 > `chat_data.py` 템플릿은 Claude가 쓴 문장이라 Anthropic 약관상 대화 모델 학습에 쓰지 않아 (명령 분류 모델에만 사용).
 
 명령이면 명령 이해 모델이 처리하고, 명령이 아닌 말은 대화 모델이 대답해.
@@ -144,11 +154,12 @@ Arcana/
 │  ├─ chat_model.py       대화 모델 정의 + 크기 설정(PRESETS)
 │  ├─ train_chat.py       대화 모델 학습 (--size small/base/large)
 │  ├─ train_feedback.py   피드백 학습 (DPO) — 피드백_학습하기.bat
+│  ├─ pretrain_notes.py   공책 사전학습 + 대화 학습 — 공책으로_학습하기.bat
+│  ├─ convert_dialogue.py 대화 파일 → 학습 데이터 (합니다체 변환)
 │  └─ export.py           Rust가 읽는 형식으로 내보내기
 ├─ models/                🧠 학습 결과 (exe 안에 내장됨)
 │  ├─ arcana-nlu.safetensors   가중치 (HuggingFace 표준 형식)
 │  ├─ arcana-nlu.json          설정 + 글자 사전 + 의도 목록
-│  ├─ arcana-chat.*            대화 모델
 │  └─ golden*.json             Rust = PyTorch 검사용
 ├─ crates/
 │  ├─ arcana-core/        🦀 Arcana 모델 추론 엔진 (외부 AI 라이브러리 없이 직접 구현, KV 캐시)

@@ -105,6 +105,9 @@ impl Skill for Chat {
                     if let Some(r) = best {
                         return Reply::chat(r.trim());
                     }
+                } else {
+                    // 대화 모델이 아직 없음 → 지어내지 않고 검색·질문
+                    return unfamiliar(cx);
                 }
                 Reply::say(match intent {
                     "greet" => pick(&["안녕하세요. 무엇을 도와드릴까요?", "반갑습니다. 필요한 게 있으시면 말씀해 주십시오."]),

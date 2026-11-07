@@ -39,6 +39,8 @@ pub struct Config {
     pub chat_top_k: usize,
     /// 비슷하면 긴 대답을 우대
     pub prefer_long_replies: bool,
+    /// 학습 도구 폴더 (Arcana 레포의 training 폴더). /Train 이 여기 있는 bat 을 실행
+    pub training_dir: String,
     /// (선택) Brave Search API 키 — 넣으면 채팅 검색이 일반 웹 전체에서 됨. 없으면 위키백과 + DuckDuckGo 요약
     pub brave_api_key: String,
     pub apps: BTreeMap<String, AppEntry>,
@@ -162,6 +164,7 @@ impl Default for Config {
             site_delay_secs: 0,
             site_daily_limit: 100,
             brave_api_key: String::new(),
+            training_dir: String::new(),
             think_depth: 8,
             chat_temperature: 0.9,
             chat_top_k: 16,

@@ -2,7 +2,7 @@
 Arcana 대화 모델 학습
 
   python convert_dialogue.py 대화.txt       # 먼저: 대화 파일 → data/dialogue.jsonl (대답은 합니다체로)
-  python train_chat.py                      # small (약 200만) — CPU 15분, 결과는 exe에 내장됨
+  python train_chat.py                      # small (약 200만) — CPU 15분
   python train_chat.py --size base          # base  (약 2,500만) — 그래픽카드 권장 (3060 Ti 기준 2~3시간)
   python train_chat.py --size base --data my_chat.jsonl   # 직접 구한 대화 데이터 추가
 
@@ -12,9 +12,8 @@ Arcana 대화 모델 학습
 학습 데이터: data/ 폴더의 모든 .jsonl  +  --data 로 준 파일
   (chat_data.py 템플릿은 Claude가 쓴 문장이라 Anthropic 약관상 대화 모델 학습에 안 씀)
 
-결과:
-  small → ../models/ (앱에 내장)
-  base/large → out/<size>/  →  %APPDATA%\\Arcana\\models\\ 에 복사하면 앱이 그걸 대신 씀
+결과: %APPDATA%\\Arcana\\models\\arcana-chat.*  → 학습 탭 /Reload 또는 앱 다시 켜기
+(공책 문서로 사전학습까지 하려면 pretrain_notes.py 가 더 좋음)
 """
 import argparse
 import json
@@ -139,14 +138,13 @@ def main():
     for t in TEST:
         print(f"{t}  →  {model.reply(vocab, t, temperature=0.7)}")
 
-    out = MODELS if args.size == "small" else os.path.join(HERE, "out", args.size)
+    from train_feedback import default_dir
+    out = os.path.join(default_dir(), "models")
     os.makedirs(out, exist_ok=True)
     torch.save({"config": model.config, "state": model.state_dict(), "vocab": vocab.itos},
                os.path.join(HERE, f"chat_model_{args.size}.pt"))
-    export(model, vocab, out, golden=args.size == "small", user_texts=[u for u, _ in pairs])
-    if args.size != "small":
-        print(f"\n앱에 적용하려면 {os.path.abspath(out)} 안의 arcana-chat.safetensors, arcana-chat.json 두 파일을\n"
-              f"%APPDATA%\\Arcana\\models\\ 폴더에 복사하고 앱을 다시 켜면 돼.")
+    export(model, vocab, out, user_texts=[u for u, _ in pairs])
+    print("학습 탭에서 /Reload 를 입력하거나 앱을 다시 켜면 새 모델로 대화합니다.")
 
 
 def known_inputs(user_texts):
@@ -156,7 +154,7 @@ def known_inputs(user_texts):
     return sorted(u for u in out if len(re.sub(r"[\s|]", "", u)) >= 2)
 
 
-def export(model, vocab, out, golden, user_texts):
+def export(model, vocab, out, user_texts):
     write_safetensors(os.path.join(out, "arcana-chat.safetensors"), model.state_dict())
     meta = {
         "format_version": 1,
@@ -170,10 +168,6 @@ def export(model, vocab, out, golden, user_texts):
     }
     with open(os.path.join(out, "arcana-chat.json"), "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False, indent=1)
-    if golden:
-        g = [{"text": t, "greedy": model.reply(vocab, t, temperature=0)} for t in TEST]
-        with open(os.path.join(out, "golden-chat.json"), "w", encoding="utf-8") as f:
-            json.dump(g, f, ensure_ascii=False, indent=1)
     print(f"내보내기 완료 → {os.path.abspath(out)}")
 
 
