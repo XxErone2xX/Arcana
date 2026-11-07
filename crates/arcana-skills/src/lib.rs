@@ -240,6 +240,7 @@ const TRAINING_FILES: &[(&str, &str)] = &[
     ("train_chat.py", include_str!("../../../training/train_chat.py")),
     ("train_feedback.py", include_str!("../../../training/train_feedback.py")),
     ("import_aihub_legal.py", include_str!("../../../training/import_aihub_legal.py")),
+    ("import_aihub_callcenter.py", include_str!("../../../training/import_aihub_callcenter.py")),
     ("requirements.txt", include_str!("../../../training/requirements.txt")),
     ("공책으로_학습하기.bat", include_str!("../../../training/공책으로_학습하기.bat")),
     ("큰모델_학습하기.bat", include_str!("../../../training/큰모델_학습하기.bat")),
