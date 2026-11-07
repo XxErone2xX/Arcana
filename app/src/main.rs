@@ -407,6 +407,8 @@ fn main() {
             let assistant = Arc::new(Assistant::new(Box::new(brain), talker, dir, events));
             assistant.start_self_study();
             assistant.start_auto_train();
+            // 학습 도구를 앱 버전에 맞게 항상 최신으로 (bat 파일을 직접 실행해도 고친 코드가 쓰이게)
+            let _ = arcana_skills::install_training_tools(&assistant.data_dir);
             app.manage(AppState {
                 assistant,
                 update: Mutex::new(None),
