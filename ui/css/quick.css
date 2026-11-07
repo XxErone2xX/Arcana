@@ -1,0 +1,53 @@
+/* 빠른 호출 창: 화면 전체를 덮는 투명 창. 가운데는 비워 두고 위아래만 물결 */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { width: 100%; height: 100%; background: transparent; overflow: hidden; }
+body { font-family: var(--font); color: #fff; -webkit-font-smoothing: antialiased; user-select: none; cursor: default; }
+
+.wave { position: fixed; left: 0; width: 100%; pointer-events: none; }
+.wave.top { top: 0; height: 46vh; }
+.wave.bottom { bottom: 0; height: 46vh; }
+
+.say, .ask {
+  position: fixed; left: 50%; transform: translateX(-50%);
+  width: min(920px, 86vw); text-align: center;
+  transition: opacity .35s ease, transform .35s ease;
+}
+body.closed .say, body.closed .ask { opacity: 0; }
+
+/* 위: 대답 */
+.say { top: 7vh; max-height: 34vh; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.who { font-size: 12px; letter-spacing: .28em; text-transform: uppercase; color: rgba(220, 225, 255, .75); text-shadow: 0 0 12px rgba(120, 110, 255, .8); }
+.reply {
+  font-size: clamp(17px, 1.6vw, 24px); line-height: 1.6; font-weight: 500; white-space: pre-wrap; word-break: break-word;
+  overflow-y: auto; max-height: 28vh; padding: 0 8px; user-select: text; cursor: text;
+  text-shadow: 0 1px 14px rgba(10, 8, 40, .9), 0 0 2px rgba(0, 0, 0, .6);
+  scrollbar-width: none;
+}
+.reply::-webkit-scrollbar { display: none; }
+.reply:empty { display: none; }
+.reply a { color: #c7d2fe; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+.status { font-size: 13px; color: rgba(210, 215, 255, .8); min-height: 1em; }
+.status .dots span { display: inline-block; width: 5px; height: 5px; margin: 0 2px; border-radius: 50%; background: currentColor; animation: dot 1.2s infinite; }
+.status .dots span:nth-child(2) { animation-delay: .15s; }
+.status .dots span:nth-child(3) { animation-delay: .3s; }
+.say.idle .who { opacity: .35; }
+.caret { display: inline-block; width: .5em; height: 1.05em; margin-left: 2px; vertical-align: -3px; background: #fff; border-radius: 2px; box-shadow: 0 0 10px #a5b4fc; animation: blink 1s steps(2) infinite; }
+
+/* 아래: 입력 */
+.ask { bottom: 6vh; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.sent { font-size: 14px; color: rgba(255, 255, 255, .55); white-space: pre-wrap; word-break: break-word; max-height: 12vh; overflow: hidden; }
+.sent:empty { display: none; }
+#q {
+  width: 100%; resize: none; overflow-y: hidden; border: 0; outline: 0; background: transparent;
+  color: #fff; caret-color: #c4b5fd; text-align: center;
+  font: 500 clamp(20px, 2vw, 30px)/1.45 var(--font);
+  text-shadow: 0 1px 16px rgba(10, 8, 40, .95), 0 0 2px rgba(0, 0, 0, .7);
+  user-select: text;
+}
+#q::placeholder { color: rgba(225, 228, 255, .55); }
+.keys { font-size: 11.5px; color: rgba(225, 228, 255, .55); }
+kbd { font: 11px var(--mono); padding: 1px 6px; margin: 0 2px; border-radius: 5px; border: 1px solid rgba(255, 255, 255, .25); background: rgba(255, 255, 255, .06); }
+body.answering .keys, body.answering #q::placeholder { opacity: .4; }
+
+@keyframes dot { 0%, 60%, 100% { opacity: .25; } 30% { opacity: 1; } }
+@keyframes blink { 50% { opacity: 0; } }

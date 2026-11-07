@@ -1,17 +1,19 @@
 // 학습 탭: /Start 하면 Arcana가 스스로 공부하고, 모르는 게 생기면 질문함
 import { api } from "./api.js";
 import { attachPalette, ICONS } from "./palette.js";
+import { textbox, stickyScroll } from "./compose.js";
 
 const $ = (s) => document.querySelector(s);
 const feed = $("#feed");
 const input = $("#study-input");
 const sendBtn = $("#study-send");
 let onStudyTab = false;
+const scroller = stickyScroll(feed);
 
 // ───────────── 탭 전환 ─────────────
-document.querySelectorAll(".tab").forEach((t) => {
+document.querySelectorAll(".titlebar .tab").forEach((t) => {
   t.onclick = () => {
-    document.querySelectorAll(".tab").forEach((x) => x.classList.toggle("active", x === t));
+    document.querySelectorAll(".titlebar .tab").forEach((x) => x.classList.toggle("active", x === t));
     onStudyTab = t.dataset.view === "study";
     $("#view-chat").hidden = onStudyTab;
     $("#view-study").hidden = !onStudyTab;
@@ -50,7 +52,7 @@ function line(text, cls = "") {
   el.append(t, s);
   feed.appendChild(el);
   while (feed.children.length > 300) feed.firstChild.remove();
-  feed.scrollTop = feed.scrollHeight;
+  if (cls === "me") scroller.force(); else scroller.follow();
 }
 
 function render(r) {
@@ -77,7 +79,7 @@ async function submit(text) {
   text = text.trim();
   if (!text) return;
   line(text, "me");
-  input.value = "";
+  box.clear();
   sendBtn.disabled = true;
   try {
     render(await api.study(text));
@@ -86,6 +88,7 @@ async function submit(text) {
   }
 }
 
+const box = textbox(input, (v) => submit(v));
 $("#study-form").addEventListener("submit", (e) => { e.preventDefault(); submit(input.value); });
 input.addEventListener("input", () => { sendBtn.disabled = !input.value.trim(); });
 $("#q-skip").onclick = () => submit("/Skip");

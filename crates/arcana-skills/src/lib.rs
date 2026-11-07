@@ -9,8 +9,10 @@
 //! 3. 새 의도면 `training/data.py` 에 문장 템플릿 추가 후 재학습
 
 pub mod config;
+pub mod context;
 pub mod crawler;
 pub mod knowledge;
+pub mod memory;
 pub mod net;
 pub mod skills;
 pub mod util;
@@ -41,6 +43,8 @@ pub enum Event {
     StudyLog { text: String },
     /// Arcana가 사용자에게 질문 (학습 탭)
     Question { text: String },
+    /// 생각 중 진행 상황 (PrimeThink 라운드 등) — 대화창 "생각 중" 표시
+    Thinking { text: String },
 }
 
 pub type EventSink = Arc<dyn Fn(Event) + Send + Sync>;
@@ -57,6 +61,8 @@ pub struct Context {
     pub talker: Option<Arc<dyn Talker>>,
     /// 지식 저장소 (공책)
     pub knowledge: Option<Arc<knowledge::Knowledge>>,
+    /// 메모리에 저장된 사용자 이름 (인사할 때 씀)
+    pub user_name: Option<String>,
 }
 
 impl Context {
@@ -230,6 +236,10 @@ pub struct Assistant {
     pub config: Arc<RwLock<Config>>,
     pub data_dir: PathBuf,
     events: EventSink,
+    /// 메모리 (사용자에 대해 오래 기억)
+    pub memory: memory::Memory,
+    /// 컨테이너 메모리 (대화 기록 + 맥락)
+    pub container: context::Container,
 }
 
 impl Assistant {
@@ -241,7 +251,11 @@ impl Assistant {
     ) -> Self {
         let config = Arc::new(RwLock::new(Config::load_or_create(&data_dir)));
         let knowledge = knowledge::Knowledge::open(data_dir.join("knowledge"));
+        let memory = memory::Memory::open(&data_dir);
+        let container = context::Container::open(&data_dir);
         let mut a = Self {
+            memory,
+            container,
             brain,
             talker: RwLock::new(talker),
             knowledge,
@@ -273,71 +287,77 @@ impl Assistant {
             events: self.events.clone(),
             talker: self.talker.read().unwrap().clone(),
             knowledge: Some(self.knowledge.clone()),
+            user_name: if self.config.read().unwrap().memory_enabled { self.memory.name() } else { None },
         }
     }
 
     pub fn handle(&self, text: &str) -> Response {
-        let u = self.brain.understand(text);
+        let r = self.handle_inner(text);
+        let (on, mb) = {
+            let c = self.config.read().unwrap();
+            (c.container_enabled, c.container_mb)
+        };
+        let intent = if r.fallback { "unknown" } else { r.understanding.intent.as_str() };
+        self.container.record(text, &r.reply.text, intent, &r.understanding.slots, on, mb);
+        r
+    }
+
+    fn direct(intent: &str, reply: Reply) -> Response {
+        Response {
+            understanding: Understanding { intent: intent.into(), confidence: 1.0, slots: Default::default() },
+            fallback: false,
+            reply,
+        }
+    }
+
+    fn handle_inner(&self, text: &str) -> Response {
+        let mut u = self.brain.understand(text);
+        // 0) 메모리: "내 이름은 ○○야" 저장 / "내 이름 뭐야?" 대답
+        if self.config.read().unwrap().memory_enabled {
+            if let Some(a) = self.memory.answer(text) {
+                return Self::direct("memory", Reply::say(a));
+            }
+            if let Some(a) = self.memory.observe(text) {
+                return Self::direct("memory", Reply::say(a));
+            }
+        }
         // 1) 사용자가 직접 가르쳐 준 말이면 그 대답
         if let Some(r) = self.knowledge.taught_reply(text) {
-            let u = Understanding {
-                intent: "taught".into(),
-                confidence: 1.0,
-                slots: Default::default(),
-            };
-            return Response {
-                understanding: u,
-                fallback: false,
-                reply: Reply::chat(r),
-            };
+            return Self::direct("taught", Reply::chat(r));
         }
         // 2) 웹 주소가 들어 있으면 그 페이지 읽기
         if let Some(url) = skills::web::find_url(text) {
-            let mut slots = std::collections::BTreeMap::new();
-            slots.insert("URL".to_string(), url);
-            let u = Understanding {
-                intent: "read_page".into(),
-                confidence: 1.0,
-                slots,
-            };
-            let reply = match self.route.get("read_page") {
-                Some(&i) => self.skills[i].run("read_page", &u, &self.ctx(text)),
-                None => Reply::error("페이지 읽기 스킬이 없습니다."),
-            };
-            return Response {
-                understanding: u,
-                fallback: false,
-                reply,
-            };
+            u = Understanding { intent: "read_page".into(), confidence: 1.0, slots: [("URL".to_string(), url)].into() };
+            let reply = self.run_intent("read_page", &u, text);
+            return Response { understanding: u, fallback: false, reply };
+        }
+        // 3) 대화 맥락: "그거 꺼줘", "아까 검색한 거", "한 번 더"
+        if self.container.resolve(text, &mut u) {
+            let intent = u.intent.clone();
+            let reply = self.run_intent(&intent, &u, text);
+            return Response { understanding: u, fallback: false, reply };
         }
         let threshold = self.config.read().unwrap().threshold;
         // 안전장치: 실제로 무언가를 실행하는 명령은 문장에 그 동작 말이 있을 때만
         //   ("어제 잠 못 잤어?" → 화면 잠금 X, "디코 들어와" → 디스코드 끄기 X)
         let blocked = !intent_has_action_words(&u.intent, text);
         let fallback = u.confidence < threshold || blocked;
-        // 3) 확신이 낮으면(잘 못 알아들음) 학습 탭에서 어떻게 대답할지 물어보기
+        // 4) 확신이 낮으면(잘 못 알아들음) 학습 탭에서 어떻게 대답할지 물어보기
         if fallback && text.trim().chars().count() >= 2 {
-            let q = knowledge::Question::Reply {
-                phrase: text.trim().to_string(),
-            };
+            let q = knowledge::Question::Reply { phrase: text.trim().to_string() };
             if self.knowledge.ask(q.clone()) {
                 self.emit_question();
             }
         }
-        let intent = if fallback {
-            "unknown"
-        } else {
-            u.intent.as_str()
-        };
-        let cx = self.ctx(text);
-        let reply = match self.route.get(intent) {
-            Some(&i) => self.skills[i].run(intent, &u, &cx),
+        let intent = if fallback { "unknown".to_string() } else { u.intent.clone() };
+        let reply = self.run_intent(&intent, &u, text);
+        Response { understanding: u, fallback, reply }
+    }
+
+    fn run_intent(&self, intent: &str, u: &Understanding, text: &str) -> Reply {
+        match self.route.get(intent) {
+            Some(&i) => self.skills[i].run(intent, u, &self.ctx(text)),
             None => Reply::error(format!("'{intent}' 명령을 처리할 스킬이 아직 없습니다.")),
-        };
-        Response {
-            understanding: u,
-            fallback,
-            reply,
         }
     }
 

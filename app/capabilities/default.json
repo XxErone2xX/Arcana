@@ -1,8 +1,11 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "메인 창 권한",
-  "windows": ["main"],
+  "description": "메인 창 + 빠른 호출 창 권한",
+  "windows": [
+    "main",
+    "quick"
+  ],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",

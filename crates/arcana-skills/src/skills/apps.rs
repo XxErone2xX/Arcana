@@ -46,7 +46,7 @@ impl Skill for Apps {
         }
         let Some((name, app)) = find(cx, &said) else {
             return Reply::error(format!(
-                "'{said}'{}은 아직 등록되지 않은 프로그램입니다. 메뉴 → 설정 파일 열기에서 추가해 주십시오.", eun(&said)
+                "'{said}'{} 아직 등록되지 않은 프로그램입니다. 메뉴 → 설정 파일 열기에서 추가해 주십시오.", eun(&said)
             ));
         };
         if intent == "open_app" {

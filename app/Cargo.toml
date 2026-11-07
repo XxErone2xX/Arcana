@@ -19,6 +19,7 @@ serde.workspace = true
 serde_json.workspace = true
 tauri = { version = "2", features = [] }
 tauri-plugin-single-instance = "2"
+tauri-plugin-global-shortcut = "2"
 ureq = { version = "2", features = ["json", "native-tls"] }
 self-replace = "1"
 semver = "1"

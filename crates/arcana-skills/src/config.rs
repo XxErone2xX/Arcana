@@ -39,6 +39,17 @@ pub struct Config {
     pub chat_top_k: usize,
     /// 비슷하면 긴 대답을 우대
     pub prefer_long_replies: bool,
+    /// 생각 수치 1~5 (모델 탭 슬라이더). 5 = PrimeThink: 스스로 완벽하다고 할 때까지 생각
+    pub think_level: u8,
+    /// 메모리 켜기 (이름·좋아하는 것 등 기억)
+    pub memory_enabled: bool,
+    /// 컨테이너 메모리 켜기 (대화 기록 저장 → 앱을 다시 켜도 맥락 유지)
+    pub container_enabled: bool,
+    /// 컨테이너 메모리 최대 크기 (MB, 10 ~ 10240)
+    pub container_mb: u64,
+    /// 빠른 호출 단축키 (어느 화면에서든 Arcana 부르기). 예: "Shift+A", "Ctrl+Space", "Alt+Q"
+    pub hotkey: String,
+    pub hotkey_enabled: bool,
     /// 학습 도구 폴더 (Arcana 레포의 training 폴더). /Train 이 여기 있는 bat 을 실행
     pub training_dir: String,
     /// (선택) Brave Search API 키 — 넣으면 채팅 검색이 일반 웹 전체에서 됨. 없으면 위키백과 + DuckDuckGo 요약
@@ -151,7 +162,7 @@ impl Default for Config {
             ),
         );
         Self {
-            version: 2,
+            version: 3,
             name: "Arcana".into(),
             threshold: 0.55,
             auto_update: true,
@@ -169,12 +180,35 @@ impl Default for Config {
             chat_temperature: 0.9,
             chat_top_k: 16,
             prefer_long_replies: true,
+            think_level: 3,
+            memory_enabled: true,
+            container_enabled: true,
+            container_mb: 100,
+            hotkey: "Shift+A".into(),
+            hotkey_enabled: true,
             apps,
         }
     }
 }
 
+/// 생각 수치 → (후보 수, 다듬기 횟수, PrimeThink)
+pub struct Think {
+    pub candidates: usize,
+    pub rounds: usize,
+    pub prime: bool,
+}
+
 impl Config {
+    pub fn think(&self) -> Think {
+        match self.think_level.clamp(1, 5) {
+            1 => Think { candidates: 2, rounds: 1, prime: false },
+            2 => Think { candidates: 4, rounds: 1, prime: false },
+            3 => Think { candidates: 8, rounds: 1, prime: false },
+            4 => Think { candidates: 16, rounds: 2, prime: false },
+            _ => Think { candidates: 16, rounds: 12, prime: true },
+        }
+    }
+
     pub fn path(dir: &Path) -> std::path::PathBuf {
         dir.join("config.json")
     }
@@ -193,6 +227,17 @@ impl Config {
                             c.site_delay_secs = 0;
                         }
                         c.version = 2;
+                        c.save(dir);
+                    }
+                    // v2 → v3: 메모리·생각 수치 추가 (serde default 가 false/0 을 넣으므로 켜 줌)
+                    if c.version < 3 {
+                        c.think_level = 3;
+                        c.memory_enabled = true;
+                        c.container_enabled = true;
+                        c.container_mb = 100;
+                        c.hotkey = "Shift+A".into();
+                        c.hotkey_enabled = true;
+                        c.version = 3;
                         c.save(dir);
                     }
                     c

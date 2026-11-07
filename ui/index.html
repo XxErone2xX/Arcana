@@ -43,12 +43,12 @@
 
   <footer class="bottom">
     <form class="composer" id="composer" autocomplete="off">
-      <input id="input" placeholder="Arcana에게 명령하기" maxlength="200" />
+      <textarea id="input" rows="1" placeholder="Arcana에게 말하기" maxlength="2000"></textarea>
       <button type="submit" class="send" id="send" title="보내기" disabled>
         <svg viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></svg>
       </button>
     </form>
-    <p class="hint">Enter로 보내기 · ↑ 이전 명령</p>
+    <p class="hint" id="hint">Enter 보내기 · Shift+Enter 줄바꿈 · ↑ 이전 명령</p>
   </footer>
   </div>
 
@@ -71,40 +71,115 @@
     </section>
     <footer class="bottom">
       <form class="composer" id="study-form" autocomplete="off">
-        <input id="study-input" placeholder="/Start · /Stop · /Status · /Help 또는 질문에 대답" maxlength="300" />
+        <textarea id="study-input" rows="1" placeholder="/Start · /Stop · /Status · /Help 또는 질문에 대답" maxlength="2000"></textarea>
         <button type="submit" class="send" id="study-send" title="보내기" disabled>
           <svg viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></svg>
         </button>
       </form>
-      <p class="hint">명령은 / 로 시작 · 그 외에는 질문에 대한 대답</p>
+      <p class="hint">명령은 / 로 시작 · 그 외에는 질문에 대한 대답 · Shift+Enter 줄바꿈</p>
     </footer>
   </div>
 
-  <!-- 사이드 메뉴 -->
-  <aside class="drawer" id="drawer" hidden>
-    <div class="drawer-panel">
-      <section>
-        <h2>할 수 있는 것</h2>
-        <ul id="caps" class="caps"></ul>
-      </section>
+  <!-- 설정 창 -->
+  <div class="sheet" id="sheet" hidden>
+    <div class="sheet-panel" role="dialog" aria-label="설정">
+      <header class="sheet-head">
+        <nav class="tabs" id="sheet-tabs">
+          <button class="tab active" data-page="settings">설정</button>
+          <button class="tab" data-page="model">모델</button>
+          <button class="tab" data-page="about">정보</button>
+        </nav>
+        <button class="icon-btn" id="sheet-close" title="닫기 (Esc)">
+          <svg viewBox="0 0 24 24"><path d="M7 7l10 10M17 7L7 17"/></svg>
+        </button>
+      </header>
 
-      <section>
-        <h2>설정</h2>
-        <label class="switch"><span>AI 판단 과정 보기</span><input type="checkbox" id="opt-debug" /><i></i></label>
-        <label class="switch"><span>자동 업데이트</span><input type="checkbox" id="opt-update" /><i></i></label>
-        <div class="row">
-          <button class="btn" id="btn-config">설정 파일 열기</button>
-          <button class="btn" id="btn-reload">다시 읽기</button>
+      <div class="sheet-body">
+        <!-- 설정 -->
+        <div class="page" data-page="settings">
+          <section class="group" id="sec-general">
+            <h2>일반</h2>
+            <label class="switch"><span>AI 판단 과정 보기</span><input type="checkbox" id="opt-debug" /><i></i></label>
+            <label class="switch"><span>자동 업데이트</span><input type="checkbox" id="opt-update" /><i></i></label>
+            <div class="row">
+              <button class="btn" id="btn-config">설정 파일 열기</button>
+              <button class="btn" id="btn-reload">다시 읽기</button>
+            </div>
+          </section>
+
+          <section class="group" id="sec-hotkey">
+            <h2>빠른 호출</h2>
+            <p class="desc">어느 화면에서든 단축키를 누르면 Arcana를 바로 부를 수 있습니다. Esc로 취소합니다.</p>
+            <label class="switch"><span>빠른 호출 켜기</span><input type="checkbox" id="opt-hotkey" /><i></i></label>
+            <div class="field">
+              <span>단축키</span>
+              <button class="keycap" id="hotkey-btn" title="눌러서 바꾸기">Shift+A</button>
+            </div>
+            <p class="desc warn" id="hotkey-error" hidden></p>
+          </section>
+
+          <section class="group" id="sec-memory">
+            <h2>메모리</h2>
+            <p class="desc">이름, 좋아하는 것처럼 대화 중에 알게 된 것을 오래 기억합니다. "기억해: ○○"라고 말해도 됩니다. 이 PC에만 저장됩니다.</p>
+            <label class="switch"><span>메모리 사용</span><input type="checkbox" id="opt-memory" /><i></i></label>
+            <ul class="facts" id="facts"></ul>
+            <form class="add-fact" id="add-fact" autocomplete="off">
+              <input id="fact-input" placeholder="직접 추가 (예: 매운 음식을 못 먹음)" maxlength="200" />
+              <button class="btn" type="submit">추가</button>
+            </form>
+            <button class="btn danger" id="memory-clear">메모리 모두 지우기</button>
+          </section>
+
+          <section class="group" id="sec-container">
+            <h2>컨테이너 메모리</h2>
+            <p class="desc">대화 내용을 임시로 저장해서 "그거 꺼줘", "아까 검색한 거" 같은 말을 알아듣습니다. 앱을 다시 켜도 이어집니다. 가득 차면 오래된 것부터 지웁니다.</p>
+            <label class="switch"><span>컨테이너 메모리 사용</span><input type="checkbox" id="opt-container" /><i></i></label>
+            <div class="field">
+              <span>최대 크기</span>
+              <b id="container-size">100 MB</b>
+            </div>
+            <input type="range" class="slider" id="container-range" min="0" max="100" step="1" />
+            <div class="scale"><span>10 MB</span><span>10 GB</span></div>
+            <div class="usage"><i id="container-bar"></i></div>
+            <div class="field small"><span id="container-used">사용 중</span><button class="btn danger" id="container-clear">대화 기록 지우기</button></div>
+          </section>
         </div>
-      </section>
 
-      <section>
-        <h2>정보</h2>
-        <dl class="about" id="about"></dl>
-        <button class="btn" id="btn-update">업데이트 확인</button>
-      </section>
+        <!-- 모델 -->
+        <div class="page" data-page="model" hidden>
+          <section class="group">
+            <h2>생각 수치</h2>
+            <p class="desc">오른쪽으로 갈수록 대답하기 전에 더 오래 생각하고, 더 많은 대답을 만들어 본 뒤 가장 좋은 것을 고릅니다.</p>
+            <div class="think" id="think">
+              <input type="range" class="slider" id="think-range" min="1" max="5" step="1" />
+              <div class="scale"><span>빠르게</span><span>신중하게</span><span class="prime-label">PrimeThink</span></div>
+              <div class="think-card" id="think-card">
+                <b id="think-title"></b>
+                <p id="think-desc"></p>
+              </div>
+            </div>
+          </section>
+          <section class="group">
+            <h2>모델</h2>
+            <dl class="about" id="model-info"></dl>
+          </section>
+        </div>
+
+        <!-- 정보 -->
+        <div class="page" data-page="about" hidden>
+          <section class="group">
+            <h2>할 수 있는 것</h2>
+            <ul id="caps" class="caps"></ul>
+          </section>
+          <section class="group">
+            <h2>정보</h2>
+            <dl class="about" id="about"></dl>
+            <button class="btn" id="btn-update">업데이트 확인</button>
+          </section>
+        </div>
+      </div>
     </div>
-  </aside>
+  </div>
 
   <!-- 업데이트 중 화면 -->
   <div class="overlay" id="overlay" hidden>

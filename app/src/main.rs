@@ -8,10 +8,12 @@ use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager, State};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 struct AppState {
     assistant: Arc<Assistant>,
     update: Mutex<Option<updater::UpdateInfo>>,
+    hotkey_error: Mutex<Option<String>>,
 }
 
 #[derive(Serialize)]
@@ -26,6 +28,22 @@ struct Info {
     auto_update: bool,
     data_dir: String,
     missing_skills: Vec<String>,
+    think_level: u8,
+    memory_enabled: bool,
+    container_enabled: bool,
+    container_mb: u64,
+    hotkey: String,
+    hotkey_enabled: bool,
+    /// 단축키 등록 실패 이유 (다른 프로그램이 쓰는 중 등)
+    hotkey_error: Option<String>,
+}
+
+#[derive(Serialize)]
+struct ContainerInfo {
+    used_bytes: u64,
+    max_mb: u64,
+    enabled: bool,
+    turns: usize,
 }
 
 // ───────────────────── UI에서 부르는 명령들 (ui/js/api.js) ─────────────────────
@@ -87,7 +105,157 @@ fn info(app: AppHandle, state: State<AppState>) -> Info {
         auto_update: c.auto_update,
         data_dir: a.data_dir.display().to_string(),
         missing_skills: a.missing_skills(),
+        think_level: c.think_level.clamp(1, 5),
+        memory_enabled: c.memory_enabled,
+        container_enabled: c.container_enabled,
+        container_mb: c.container_mb,
+        hotkey: c.hotkey.clone(),
+        hotkey_enabled: c.hotkey_enabled,
+        hotkey_error: state.hotkey_error.lock().unwrap().clone(),
     }
+}
+
+/// 숫자·글자 설정 (생각 수치, 컨테이너 크기, 단축키 등)
+#[tauri::command]
+fn set_value(app: AppHandle, state: State<AppState>, key: String, value: serde_json::Value) -> Result<(), String> {
+    let a = &state.assistant;
+    {
+        let mut c = a.config.write().unwrap();
+        match key.as_str() {
+            "think_level" => c.think_level = value.as_u64().ok_or("숫자가 필요합니다")?.clamp(1, 5) as u8,
+            "container_mb" => c.container_mb = value.as_u64().ok_or("숫자가 필요합니다")?.clamp(10, 10240),
+            "memory_enabled" => c.memory_enabled = value.as_bool().ok_or("참/거짓이 필요합니다")?,
+            "container_enabled" => c.container_enabled = value.as_bool().ok_or("참/거짓이 필요합니다")?,
+            "hotkey_enabled" => c.hotkey_enabled = value.as_bool().ok_or("참/거짓이 필요합니다")?,
+            "hotkey" => {
+                let k = value.as_str().ok_or("글자가 필요합니다")?.trim().to_string();
+                k.parse::<Shortcut>().map_err(|_| format!("'{k}'은(는) 단축키로 쓸 수 없습니다"))?;
+                c.hotkey = k;
+            }
+            _ => return Err("모르는 설정입니다".into()),
+        }
+        c.save(&a.data_dir);
+    }
+    if key.starts_with("hotkey") {
+        // 등록이 되는지 확인 (설정은 메인 창에서 바꾸니까 확인 후 다시 풀어 둠)
+        register_hotkey(&app);
+        let focused = app.get_webview_window("main").and_then(|w| w.is_focused().ok()).unwrap_or(false);
+        if focused {
+            pause_hotkey(&app);
+        }
+        if let Some(e) = state.hotkey_error.lock().unwrap().clone() {
+            return Err(e);
+        }
+    }
+    Ok(())
+}
+
+// ── 메모리 ──
+#[tauri::command]
+fn memory_list(state: State<AppState>) -> Vec<arcana_skills::memory::Fact> {
+    state.assistant.memory.list()
+}
+
+#[tauri::command]
+fn memory_add(state: State<AppState>, text: String) -> Result<arcana_skills::memory::Fact, String> {
+    let t = text.trim();
+    if t.is_empty() {
+        return Err("내용을 입력해 주세요".into());
+    }
+    Ok(state.assistant.memory.add("note", t))
+}
+
+#[tauri::command]
+fn memory_remove(state: State<AppState>, id: u64) {
+    state.assistant.memory.remove(id)
+}
+
+#[tauri::command]
+fn memory_clear(state: State<AppState>) {
+    state.assistant.memory.clear()
+}
+
+// ── 컨테이너 메모리 ──
+#[tauri::command]
+fn container_info(state: State<AppState>) -> ContainerInfo {
+    let a = &state.assistant;
+    let c = a.config.read().unwrap();
+    ContainerInfo {
+        used_bytes: a.container.usage_bytes(),
+        max_mb: c.container_mb,
+        enabled: c.container_enabled,
+        turns: a.container.recent(usize::MAX).len(),
+    }
+}
+
+#[tauri::command]
+fn container_clear(state: State<AppState>) {
+    state.assistant.container.clear()
+}
+
+// ── 빠른 호출 (Shift+A) ──
+#[tauri::command]
+fn quick_hide(app: AppHandle) {
+    if let Some(w) = app.get_webview_window("quick") {
+        let _ = w.hide();
+    }
+    // 닫았으니 다시 어디서든 부를 수 있게 (메인 창에서 입력 중이면 제외)
+    let main_focused = app.get_webview_window("main").and_then(|w| w.is_focused().ok()).unwrap_or(false);
+    if !main_focused {
+        register_hotkey(&app);
+    }
+}
+
+/// 단축키는 키 입력을 가로채므로, Arcana 창에서 글을 쓰는 동안에는 잠깐 풀어 둠
+/// (예: Shift+A 라면 Arcana 창 안에서는 대문자 A 가 그대로 입력되게)
+fn pause_hotkey(app: &AppHandle) {
+    let _ = app.global_shortcut().unregister_all();
+}
+
+/// 마우스가 있는 화면 전체를 덮게 빠른 호출 창을 띄움
+fn quick_show(app: &AppHandle) {
+    let Some(w) = app.get_webview_window("quick") else { return };
+    if w.is_visible().unwrap_or(false) {
+        let _ = w.set_focus();
+        return;
+    }
+    let monitor = w
+        .cursor_position()
+        .ok()
+        .and_then(|p| w.monitor_from_point(p.x, p.y).ok().flatten())
+        .or_else(|| w.primary_monitor().ok().flatten());
+    if let Some(m) = monitor {
+        let _ = w.set_position(*m.position());
+        let _ = w.set_size(*m.size());
+    }
+    let _ = w.emit("arcana://quick", "open");
+    let _ = w.show();
+    let _ = w.set_always_on_top(true);
+    let _ = w.set_focus();
+    pause_hotkey(app);
+}
+
+/// 설정의 단축키를 (다시) 등록
+fn register_hotkey(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let (key, on) = {
+        let c = state.assistant.config.read().unwrap();
+        (c.hotkey.clone(), c.hotkey_enabled)
+    };
+    let gs = app.global_shortcut();
+    let _ = gs.unregister_all();
+    let mut err = None;
+    if on {
+        match key.parse::<Shortcut>() {
+            Ok(sc) => {
+                if let Err(e) = gs.register(sc) {
+                    err = Some(format!("단축키 {key}을(를) 등록하지 못했습니다. 다른 프로그램이 쓰고 있을 수 있습니다. ({e})"));
+                }
+            }
+            Err(_) => err = Some(format!("'{key}'은(는) 단축키로 쓸 수 없습니다")),
+        }
+    }
+    *state.hotkey_error.lock().unwrap() = err;
 }
 
 #[tauri::command]
@@ -97,6 +265,8 @@ fn set_option(state: State<AppState>, key: String, value: bool) {
     match key.as_str() {
         "show_debug" => c.show_debug = value,
         "auto_update" => c.auto_update = value,
+        "memory_enabled" => c.memory_enabled = value,
+        "container_enabled" => c.container_enabled = value,
         _ => return,
     }
     c.save(&a.data_dir);
@@ -202,7 +372,33 @@ fn main() {
             app.manage(AppState {
                 assistant,
                 update: Mutex::new(None),
+                hotkey_error: Mutex::new(None),
             });
+            // 빠른 호출 단축키 (기본 Shift+A, 설정에서 변경)
+            app.handle().plugin(
+                tauri_plugin_global_shortcut::Builder::new()
+                    .with_handler(|app, _sc, e| {
+                        if e.state() == ShortcutState::Pressed {
+                            quick_show(app);
+                        }
+                    })
+                    .build(),
+            )?;
+            register_hotkey(app.handle());
+            // 메인 창에 입력하는 동안은 단축키를 풀어 둠
+            if let Some(main) = app.get_webview_window("main") {
+                let h = app.handle().clone();
+                main.on_window_event(move |e| {
+                    if let tauri::WindowEvent::Focused(f) = e {
+                        let quick_open = h.get_webview_window("quick").and_then(|w| w.is_visible().ok()).unwrap_or(false);
+                        if *f {
+                            pause_hotkey(&h);
+                        } else if !quick_open {
+                            register_hotkey(&h);
+                        }
+                    }
+                });
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -217,7 +413,15 @@ fn main() {
             open_config,
             reload_config,
             check_update,
-            apply_update
+            apply_update,
+            set_value,
+            memory_list,
+            memory_add,
+            memory_remove,
+            memory_clear,
+            container_info,
+            container_clear,
+            quick_hide
         ])
         .run(tauri::generate_context!())
         .expect("앱 실행 실패");

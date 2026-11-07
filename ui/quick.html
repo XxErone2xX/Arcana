@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Arcana 빠른 호출</title>
+  <link rel="stylesheet" href="css/theme.css" />
+  <link rel="stylesheet" href="css/quick.css" />
+</head>
+<body class="closed">
+  <!-- 위아래 물결 (위 = Arcana, 아래 = 사용자) -->
+  <canvas id="wave-top" class="wave top"></canvas>
+  <canvas id="wave-bottom" class="wave bottom"></canvas>
+
+  <!-- 위: Arcana의 대답 -->
+  <section class="say" id="say">
+    <div class="who">Arcana</div>
+    <div class="reply" id="reply"></div>
+    <div class="status" id="status"></div>
+  </section>
+
+  <!-- 아래: 사용자 입력 -->
+  <section class="ask" id="ask">
+    <div class="sent" id="sent"></div>
+    <textarea id="q" rows="1" maxlength="2000" spellcheck="false" aria-label="Arcana에게 말하기"></textarea>
+    <div class="keys"><kbd>Esc</kbd>를 눌러 취소</div>
+  </section>
+
+  <script type="module" src="js/quick.js"></script>
+</body>
+</html>

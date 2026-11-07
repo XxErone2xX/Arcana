@@ -1149,46 +1149,47 @@ impl Knowledge {
 
     /// 생각하기: 후보들을 여러 기준으로 점수 매겨서 제일 좋은 것 (best-of-N)
     ///   피드백 보상 + 자연스러움 + 길이(조금) − 최근 대답과 비슷함
+    /// 후보 하나 채점 (피드백 보상 + 자연스러움 − 최근 대답과 겹침 + 길이)
+    /// 돌려주는 값: (점수, 겹침 정도)
+    pub fn judge(&self, user: &str, c: &str, fluency: f32, prefer_long: bool) -> (f32, f32) {
+        let key = phrase_key(c);
+        let repeat = self
+            .recent
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|r| bigram_sim(&key, &phrase_key(r)))
+            .fold(0.0f32, f32::max);
+        let len = c.chars().count() as f32;
+        let score = self.reward(user, c) + 1.5 * fluency - 1.2 * repeat
+            + if prefer_long { 0.25 * (len / 40.0).min(2.0) } else { 0.0 };
+        (score, repeat)
+    }
+
+    /// 고른 대답을 "최근 대답"에 넣음 (다음엔 다른 대답이 나오게)
+    pub fn remember_pick(&self, c: &str) {
+        let mut r = self.recent.lock().unwrap();
+        r.push_back(c.to_string());
+        while r.len() > 12 {
+            r.pop_front();
+        }
+    }
+
     pub fn choose(
         &self,
         user: &str,
         candidates: Vec<(String, f32)>,
         prefer_long: bool,
     ) -> Option<String> {
-        let recent: Vec<String> = self
-            .recent
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|r| phrase_key(r))
-            .collect();
         let mut best: Option<(f32, String)> = None;
-        for (c, fluency) in candidates
-            .into_iter()
-            .filter(|(c, _)| c.trim().chars().count() >= 2)
-        {
-            let key = phrase_key(&c);
-            let repeat = recent
-                .iter()
-                .map(|r| bigram_sim(&key, r))
-                .fold(0.0f32, f32::max);
-            let len = c.chars().count() as f32;
-            let score = self.reward(user, &c) + 1.5 * fluency - 1.2 * repeat
-                + if prefer_long {
-                    0.25 * (len / 40.0).min(2.0)
-                } else {
-                    0.0
-                };
+        for (c, fluency) in candidates.into_iter().filter(|(c, _)| c.trim().chars().count() >= 2) {
+            let (score, _) = self.judge(user, &c, fluency, prefer_long);
             if best.as_ref().map_or(true, |(b, _)| score > *b) {
                 best = Some((score, c));
             }
         }
         let pick = best.map(|(_, c)| c)?;
-        let mut r = self.recent.lock().unwrap();
-        r.push_back(pick.clone());
-        while r.len() > 12 {
-            r.pop_front();
-        }
+        self.remember_pick(&pick);
         Some(pick)
     }
 

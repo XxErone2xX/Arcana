@@ -1,5 +1,7 @@
 import { api } from "./api.js";
 import { attachPalette, ICONS } from "./palette.js";
+import { textbox, typeOut, stickyScroll } from "./compose.js";
+import { initSettings, openSettings } from "./settings.js";
 
 const $ = (s) => document.querySelector(s);
 const log = $("#log");
@@ -7,6 +9,7 @@ const input = $("#input");
 const sendBtn = $("#send");
 
 let info = null;
+const scroller = stickyScroll(log);
 const history = [];
 let histPos = 0;
 
@@ -20,16 +23,28 @@ function addMsg(who, text, opts = {}) {
   el.className = `msg ${who}` + (opts.error ? " error" : "") + (opts.alert ? " alert" : "");
   const body = document.createElement("div");
   body.className = "body";
-  linkify(body, text);
-  if (opts.debug) {
-    const d = document.createElement("span");
-    d.className = "debug";
-    d.textContent = opts.debug;
-    body.appendChild(d);
-  }
+  const content = document.createElement("div");
+  content.className = "content";
+  body.appendChild(content);
   el.appendChild(body);
   log.appendChild(el);
-  log.scrollTop = log.scrollHeight;
+  const extras = () => {
+    if (opts.debug) {
+      const d = document.createElement("span");
+      d.className = "debug";
+      d.textContent = opts.debug;
+      body.appendChild(d);
+    }
+  };
+  if (opts.type) {
+    // 대답은 한 글자씩
+    body.done = typeOut(content, text, { render: linkify, onTick: scroller.follow }).then(extras);
+  } else {
+    linkify(content, text);
+    extras();
+    body.done = Promise.resolve();
+  }
+  if (who === "user") scroller.force(); else scroller.follow();
   return body;
 }
 
@@ -53,9 +68,9 @@ function linkify(el, text) {
 function typing() {
   const el = document.createElement("div");
   el.className = "msg bot";
-  el.innerHTML = '<div class="typing"><span></span><span></span><span></span></div>';
+  el.innerHTML = '<div class="typing"><span></span><span></span><span></span><em class="think-note"></em></div>';
   log.appendChild(el);
-  log.scrollTop = log.scrollHeight;
+  scroller.follow();
   return el;
 }
 
@@ -73,8 +88,9 @@ function button(text, cls) {
   return b;
 }
 
-function showReply(reply, r, userText) {
-  const body = addMsg("bot", reply.text, { error: reply.error, debug: info?.show_debug && r ? debugLine(r) : null });
+async function showReply(reply, r, userText) {
+  const body = addMsg("bot", reply.text, { type: true, error: reply.error, debug: info?.show_debug && r ? debugLine(r) : null });
+  await body.done;
   if (reply.confirm && r) {
     const box = document.createElement("div");
     box.className = "actions";
@@ -86,6 +102,7 @@ function showReply(reply, r, userText) {
     body.appendChild(box);
   }
   if (reply.from_chat && userText) body.appendChild(feedbackBar(userText, reply.text));
+  scroller.follow();
   if (reply.quit) setTimeout(() => api.window.close(), 900);
 }
 
@@ -131,7 +148,7 @@ async function submit(text) {
   history.push(text);
   histPos = history.length;
   addMsg("user", text);
-  input.value = "";
+  box.clear();
   sendBtn.disabled = true;
   const t = typing();
   try {
@@ -144,12 +161,15 @@ async function submit(text) {
   }
 }
 
+const box = textbox(input, (v) => submit(v));
 $("#composer").addEventListener("submit", (e) => { e.preventDefault(); submit(input.value); });
 input.addEventListener("input", () => { sendBtn.disabled = !input.value.trim(); });
 input.addEventListener("keydown", (e) => {
-  if (e.key === "ArrowUp" && histPos > 0) { input.value = history[--histPos]; e.preventDefault(); }
-  if (e.key === "ArrowDown") { histPos = Math.min(history.length, histPos + 1); input.value = history[histPos] ?? ""; }
-  if (e.key === "Escape") input.value = "";
+  // 이전 명령: 한 줄일 때만 (여러 줄이면 화살표는 줄 이동)
+  const oneLine = !input.value.includes("\n");
+  if (e.key === "ArrowUp" && oneLine && histPos > 0) { input.value = history[--histPos]; box.fit(); e.preventDefault(); }
+  else if (e.key === "ArrowDown" && oneLine && histPos < history.length) { histPos++; input.value = history[histPos] ?? ""; box.fit(); e.preventDefault(); }
+  else if (e.key === "Escape") box.clear();
   sendBtn.disabled = !input.value.trim();
 });
 
@@ -157,7 +177,9 @@ input.addEventListener("keydown", (e) => {
 attachPalette(input, [
   { name: "/Learn", desc: "학습 탭으로 가기", icon: ICONS.book, alias: ["학습"], run: () => document.querySelector('.tab[data-view="study"]').click() },
   { name: "/Clear", desc: "대화 내용 지우기", icon: ICONS.clear, alias: ["지우기"], run: () => { log.replaceChildren(); addMsg("bot", "대화 내용을 지웠습니다."); } },
-  { name: "/Settings", desc: "메뉴·설정 열기", icon: ICONS.gear, alias: ["설정"], run: () => $("#btn-menu").click() },
+  { name: "/Settings", desc: "설정 열기", icon: ICONS.gear, alias: ["설정"], run: () => openSettings("settings") },
+  { name: "/Model", desc: "모델·생각 수치", icon: ICONS.chart, alias: ["모델", "생각"], run: () => openSettings("model") },
+  { name: "/Memory", desc: "메모리 보기", icon: ICONS.book, alias: ["메모리", "기억"], run: () => openSettings("settings", "memory") },
   { name: "/Help", desc: "할 수 있는 일 보기", icon: ICONS.help, alias: ["도움말"], run: () => submit("뭐 할 수 있어?") },
 ]);
 
@@ -199,33 +221,16 @@ api.onEvent((e) => {
     addMsg("bot", e.body, { alert: true });
     toast(e.body, e.title);
   } else if (e.kind === "say") {
-    addMsg("bot", e.text);
+    addMsg("bot", e.text, { type: true });
+  } else if (e.kind === "thinking") {
+    const n = log.querySelector(".typing .think-note");
+    if (n) n.textContent = e.text;
   }
 });
 
-// ───────────── 메뉴 ─────────────
-const drawer = $("#drawer");
-$("#btn-menu").onclick = () => { drawer.hidden = !drawer.hidden; if (!drawer.hidden) renderDrawer(); };
-drawer.addEventListener("click", (e) => { if (e.target === drawer) drawer.hidden = true; });
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") drawer.hidden = true; });
-
-function renderDrawer() {
-  $("#caps").replaceChildren(...info.capabilities.map((c) => Object.assign(document.createElement("li"), { textContent: c })));
-  $("#opt-debug").checked = info.show_debug;
-  $("#opt-update").checked = info.auto_update;
-  const rows = [["버전", "v" + info.version], ["명령 모델", info.brain], ["대화 모델", info.talker ?? "없음"], ["데이터", info.data_dir]];
-  if (info.missing_skills.length) rows.push(["스킬 없음", info.missing_skills.join(", ")]);
-  $("#about").replaceChildren(...rows.flatMap(([k, v]) => [
-    Object.assign(document.createElement("dt"), { textContent: k }),
-    Object.assign(document.createElement("dd"), { textContent: v }),
-  ]));
-}
-
-$("#opt-debug").onchange = (e) => { info.show_debug = e.target.checked; api.setOption("show_debug", e.target.checked); };
-$("#opt-update").onchange = (e) => { info.auto_update = e.target.checked; api.setOption("auto_update", e.target.checked); };
-$("#btn-config").onclick = () => api.openConfig();
-$("#btn-reload").onclick = async () => { await api.reloadConfig(); info = await api.info(); renderDrawer(); toast("설정을 다시 불러왔습니다"); };
-$("#btn-update").onclick = () => checkUpdate(true);
+// ───────────── 메뉴·설정 (settings.js) ─────────────
+$("#btn-menu").onclick = () => openSettings();
+initSettings({ getInfo: () => info, setInfo: (i) => (info = i), toast, checkUpdate: () => checkUpdate(true) });
 
 // ───────────── 창 버튼 ─────────────
 $("#btn-min").onclick = () => api.window.minimize();
@@ -261,7 +266,9 @@ async function checkUpdate(manual) {
   $("#version").textContent = "v" + info.version;
   document.title = info.app_name;
   $("#app-name").textContent = info.app_name;
-  input.placeholder = `${info.name}에게 명령하기`;
+  input.placeholder = `${info.name}에게 말하기`;
+  if (info.hotkey_enabled && info.hotkey) $("#hint").textContent = `Enter 보내기 · Shift+Enter 줄바꿈 · 어디서든 ${info.hotkey}로 부르기`;
   input.focus();
   checkUpdate(false);
 })();
+
