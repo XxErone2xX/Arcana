@@ -212,8 +212,27 @@ fn pause_hotkey(app: &AppHandle) {
     let _ = app.global_shortcut().unregister_all();
 }
 
+/// Alt 를 누른 채로 단축키를 쓰면, Alt 에서 손을 뗄 때 윈도우가 "창 메뉴"를 켜서
+/// 다음 글자 하나가 '띵' 소리와 함께 먹힘. 아무 기능 없는 키(0xE8)를 한 번 눌러서
+/// Alt 가 다른 키와 같이 쓰였다고 알려 주면 메뉴가 안 켜짐 (AutoHotkey 의 MenuMaskKey 와 같은 방법)
+#[cfg(windows)]
+fn mask_alt_menu() {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP};
+    let key = |flags| INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 { ki: KEYBDINPUT { wVk: 0xE8, wScan: 0, dwFlags: flags, time: 0, dwExtraInfo: 0 } },
+    };
+    let inputs = [key(0), key(KEYEVENTF_KEYUP)];
+    unsafe {
+        SendInput(inputs.len() as u32, inputs.as_ptr(), std::mem::size_of::<INPUT>() as i32);
+    }
+}
+#[cfg(not(windows))]
+fn mask_alt_menu() {}
+
 /// 마우스가 있는 화면 전체를 덮게 빠른 호출 창을 띄움
 fn quick_show(app: &AppHandle) {
+    mask_alt_menu();
     let Some(w) = app.get_webview_window("quick") else { return };
     if w.is_visible().unwrap_or(false) {
         let _ = w.set_focus();
@@ -228,11 +247,20 @@ fn quick_show(app: &AppHandle) {
         let _ = w.set_position(*m.position());
         let _ = w.set_size(*m.size());
     }
-    let _ = w.emit("arcana://quick", "open");
-    let _ = w.show();
+    // 먼저 띄우고 포커스를 준 다음 알림 → 부르자마자 친 글자도 입력창으로 들어감
     let _ = w.set_always_on_top(true);
+    let _ = w.show();
     let _ = w.set_focus();
+    let _ = w.emit("arcana://quick", "open");
     pause_hotkey(app);
+    // 윈도우가 포커스를 늦게 넘겨주는 경우가 있어서 잠깐 뒤 한 번 더
+    let w2 = w.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(60));
+        if w2.is_visible().unwrap_or(false) && !w2.is_focused().unwrap_or(false) {
+            let _ = w2.set_focus();
+        }
+    });
 }
 
 /// 설정의 단축키를 (다시) 등록

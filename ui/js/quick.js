@@ -175,6 +175,8 @@ function frame(now) {
     lastFrame = 0;
     top.x.clearRect(0, 0, top.c.width, top.c.height);
     bottom.x.clearRect(0, 0, bottom.c.width, bottom.c.height);
+    reset();
+    q.focus(); // 숨겨진 동안에도 입력창이 포커스를 갖고 있어서, 다시 뜨면 바로 입력됨
     api.quickHide();
   } else requestAnimationFrame(frame);
 }
@@ -203,21 +205,28 @@ const box = textbox(q, (v) => submit(v), { maxHeight: 220 });
 function open() {
   token++;
   pendingConfirm = null;
-  reply.textContent = "";
-  reply.className = "reply";
-  status.textContent = "";
-  sent.textContent = "";
-  box.clear();
+  // 입력창은 비우지 않음 (창이 뜨자마자 친 글자가 지워지지 않게 — 비우는 건 닫을 때)
   resize();
   closing = false;
   document.body.classList.remove("closed");
-  Object.assign(st, { aiBusy: false, shown: false, typing: false });
+  Object.assign(st, { aiBusy: false, shown: false, typing: !!q.value.trim() });
   const now = performance.now();
   top.enter(false, now);    // 처음엔 둘 다 검정
   bottom.enter(false, now);
   update();
   animate();
-  setTimeout(() => q.focus(), 30);
+  window.focus();
+  q.focus();
+}
+
+// 다음에 열 때를 위해 깨끗하게 (닫힌 뒤에)
+function reset() {
+  reply.textContent = "";
+  reply.className = "reply";
+  status.textContent = "";
+  sent.textContent = "";
+  box.clear();
+  Object.assign(st, { aiBusy: false, shown: false, typing: false });
 }
 
 function close() {
@@ -228,7 +237,6 @@ function close() {
   const now = performance.now();
   top.leave(now);
   bottom.leave(now);
-  q.blur();
   animate(); // 사라지는 애니메이션이 끝나면 창을 숨김
 }
 
@@ -320,8 +328,14 @@ q.addEventListener("input", () => {
 });
 
 window.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") { e.preventDefault(); close(); }
-});
+  if (e.key === "Escape") { e.preventDefault(); close(); return; }
+  // 입력창 말고 다른 곳에 포커스가 있어도 글자를 치면 입력창으로 (첫 글자가 안 먹는 문제)
+  if (document.activeElement !== q && !e.ctrlKey && !e.metaKey && !e.altKey && (e.key.length === 1 || e.key === "Process")) q.focus();
+}, true);
+// 단축키(Alt+Shift+A)에서 손을 뗄 때 Alt 때문에 창 메뉴가 잡혀 다음 글자가 먹히는 것 막기
+window.addEventListener("keyup", (e) => { if (e.key === "Alt") e.preventDefault(); }, true);
+window.addEventListener("keydown", (e) => { if (e.key === "Alt") e.preventDefault(); }, true);
+window.addEventListener("focus", () => { if (!closing) q.focus(); });
 // 빈 곳을 누르면 닫기 (글자·입력창은 제외)
 window.addEventListener("mousedown", (e) => {
   if (!e.target.closest(".say, .ask")) close();

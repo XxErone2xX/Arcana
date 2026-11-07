@@ -24,3 +24,6 @@ ureq = { version = "2", features = ["json", "native-tls"] }
 self-replace = "1"
 semver = "1"
 open = "5"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_UI_Input_KeyboardAndMouse"] }
