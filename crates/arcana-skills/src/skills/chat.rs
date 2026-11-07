@@ -4,10 +4,7 @@
 use crate::knowledge::Question;
 use crate::{Context, Reply, Skill};
 
-/// 대화 모델 자신감이 이보다 낮으면 "처음 보는 말"
-const UNFAMILIAR: f32 = 0.5;
-/// 대답 후보의 자연스러움(고른 글자들의 평균 확률)이 이보다 낮으면 문장이 깨진 것으로 보고 버림
-const MIN_FLUENCY: f32 = 0.85;
+// 기준값(처음 보는 말·깨진 문장)은 설정 파일의 chat_min_familiarity / chat_min_fluency
 use arcana_core::Understanding;
 
 pub struct Chat;
@@ -58,6 +55,46 @@ fn pick<'a>(opts: &[&'a str]) -> &'a str {
     opts[n as usize % opts.len()]
 }
 
+/// 대답 다듬기: 완성된 문장까지만 (중간에 끊긴 꼬리 제거), 너무 길면 앞 2~3문장만
+fn tidy_reply(c: &str) -> String {
+    let c = c.trim();
+    let mut out = String::new();
+    let mut n = 0;
+    let mut start = 0;
+    for (i, ch) in c.char_indices() {
+        if matches!(ch, '.' | '?' | '!') {
+            let end = i + ch.len_utf8();
+            out.push_str(&c[start..end]);
+            start = end;
+            n += 1;
+            if n >= 3 || out.chars().count() >= 140 {
+                break;
+            }
+        }
+    }
+    if out.trim().is_empty() {
+        c.to_string() // 문장 부호가 없는 짧은 대답은 그대로
+    } else {
+        out.trim().to_string()
+    }
+}
+
+/// 조사로 시작하는 대답 ("에 속하지 않도록…") = 앞부분이 잘린 문장
+fn broken_start(c: &str) -> bool {
+    let first = c.split_whitespace().next().unwrap_or("");
+    matches!(first, "에" | "를" | "을" | "은" | "는" | "이" | "가" | "의" | "로" | "와" | "과" | "도" | "에서" | "으로" | "하고")
+}
+
+/// 같은 낱말을 세 번 이상 되풀이하면 깨진 대답 ("Chrome을 연 다음 Chrome을 연 다음 Chrome…")
+fn repetitive(c: &str) -> bool {
+    let words: Vec<&str> = c.split_whitespace().filter(|w| w.chars().count() >= 2).collect();
+    let mut counts = std::collections::HashMap::new();
+    for w in &words {
+        *counts.entry(*w).or_insert(0) += 1;
+    }
+    counts.values().any(|&n| n >= 3)
+}
+
 /// PrimeThink 가 "이 대답이면 완벽하다"고 인정하는 기준
 const PERFECT_FLUENCY: f32 = 0.96;
 const PERFECT_MAX_REPEAT: f32 = 0.35;
@@ -76,6 +113,7 @@ fn deliberate(
     top_k: usize,
     long: bool,
 ) -> Option<String> {
+    let min_fluency = cx.cfg().chat_min_fluency;
     let mut best: Option<(f32, String)> = None;
     let mut stale = 0usize;
     let rounds = if think.prime { usize::MAX } else { think.rounds };
@@ -86,8 +124,9 @@ fn deliberate(
         let cands = t.candidates_scored(&cx.text, n, temp, top_k);
         let mut perfect = false;
         for (c, fluency) in cands {
-            if fluency < MIN_FLUENCY || c.trim().chars().count() < 2 {
-                continue; // 문장이 깨진 후보는 버림
+            let c = tidy_reply(&c);
+            if fluency < min_fluency || c.chars().count() < 2 || repetitive(&c) || broken_start(&c) {
+                continue; // 문장이 깨졌거나 같은 말을 되풀이하는 후보는 버림
             }
             let (score, repeat, reward) = match &cx.knowledge {
                 Some(k) => {
@@ -150,7 +189,7 @@ impl Skill for Chat {
             _ => {
                 // 잡담 → 대화 모델이 직접 대답
                 if let Some(t) = &cx.talker {
-                    if t.familiarity(&cx.text) < UNFAMILIAR {
+                    if t.familiarity(&cx.text) < cx.cfg().chat_min_familiarity {
                         return unfamiliar(cx);
                     }
                     let (think, temp, top_k, long) = {

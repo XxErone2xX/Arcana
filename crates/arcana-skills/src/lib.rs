@@ -194,6 +194,18 @@ fn required_words(intent: &str) -> &'static [&'static [&'static str]] {
         "web_search" => &[&["검색", "찾아", "구글", "알아봐", "네이버", "구글링"]],
         "ask_time" => &[&["시", "시간"]],
         "ask_date" => &[&["며칠", "몇일", "날짜", "요일", "몇월"]],
+        // "와이파이가 자꾸 끊겨" 같은 말이 "와이파이가 뭐야"로 가지 않게: 묻는 말이 있어야 지식 질문
+        "ask_knowledge" => &[&[
+            "뭐", "무엇", "무슨", "알려", "설명", "누구", "어디", "언제", "왜", "어떻게", "얼마", "이란", "란?", "?", "궁금", "가르쳐", "알아",
+        ]],
+        _ => &[],
+    }
+}
+
+/// 이런 말이 있으면 명령이 아니라 상태를 말하는 것 ("화면이 안 켜져요", "앱이 자꾸 꺼져")
+fn forbidden_words(intent: &str) -> &'static [&'static str] {
+    match intent {
+        "open_app" | "close_app" => &["안켜", "안꺼", "켜져", "꺼져", "켜졌", "꺼졌", "안열", "열려", "안돼", "안되", "멈춰", "멈췄", "켜지", "꺼지"],
         _ => &[],
     }
 }
@@ -207,6 +219,7 @@ pub fn intent_has_action_words(intent: &str, text: &str) -> bool {
     required_words(intent)
         .iter()
         .all(|group| group.iter().any(|w| t.contains(w)))
+        && !forbidden_words(intent).iter().any(|w| t.contains(w))
 }
 
 /// 사용자가 학습한 대화 모델 (%APPDATA%\Arcana\models\arcana-chat.*). 없으면 Ok(None)

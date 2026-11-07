@@ -37,6 +37,10 @@ pub struct Config {
     pub chat_temperature: f32,
     /// 한 글자를 고를 때 후보 글자 수 (클수록 다양)
     pub chat_top_k: usize,
+    /// 대답 후보의 자연스러움(고른 글자 평균 확률)이 이보다 낮으면 깨진 문장으로 보고 버림
+    pub chat_min_fluency: f32,
+    /// 말이 학습한 말들과 이만큼도 안 닮았으면 \"처음 보는 말\" → 지어내지 않고 검색·질문
+    pub chat_min_familiarity: f32,
     /// 비슷하면 긴 대답을 우대
     pub prefer_long_replies: bool,
     /// 생각 수치 1~5 (모델 탭 슬라이더). 5 = PrimeThink: 스스로 완벽하다고 할 때까지 생각
@@ -170,7 +174,7 @@ impl Default for Config {
             ),
         );
         Self {
-            version: 5,
+            version: 6,
             name: "Arcana".into(),
             threshold: 0.55,
             auto_update: true,
@@ -185,8 +189,10 @@ impl Default for Config {
             brave_api_key: String::new(),
             training_dir: String::new(),
             think_depth: 8,
-            chat_temperature: 0.9,
-            chat_top_k: 16,
+            chat_temperature: 0.6,
+            chat_top_k: 8,
+            chat_min_fluency: 0.72,
+            chat_min_familiarity: 0.25,
             prefer_long_replies: true,
             think_level: 3,
             memory_enabled: true,
@@ -267,6 +273,19 @@ impl Config {
                         c.auto_train_pairs = 30;
                         c.auto_train_idle_min = 10;
                         c.version = 5;
+                        c.save(dir);
+                    }
+                    // v5 → v6: 실제 학습한 모델에 맞춰 대답 기준 조정 (예전 기준은 너무 엄격해서 대답을 거의 다 버렸음)
+                    if c.version < 6 {
+                        if (c.chat_temperature - 0.9).abs() < 1e-3 {
+                            c.chat_temperature = 0.6;
+                        }
+                        if c.chat_top_k == 16 {
+                            c.chat_top_k = 8;
+                        }
+                        c.chat_min_fluency = 0.72;
+                        c.chat_min_familiarity = 0.25;
+                        c.version = 6;
                         c.save(dir);
                     }
                     c
