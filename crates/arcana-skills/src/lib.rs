@@ -474,7 +474,7 @@ impl Assistant {
                     lines.push(if self.config.read().unwrap().obey_robots {
                         "쉬지 않고 계속 읽습니다. 사이트 규칙(robots.txt)은 지키고, 위험한 사이트는 건너뜁니다.".into()
                     } else {
-                        "쉬지 않고 계속 읽습니다. 19금·불법 도박 사이트는 건너뛰고, 같은 사이트는 1초 간격으로 읽습니다.".into()
+                        "일꾼 여러 명이 쉬지 않고 동시에 읽습니다. 19금·불법 도박 사이트만 건너뜁니다.".into()
                     });
                     lines.push("모르는 게 생기면 여기서 여쭤보겠습니다.".into());
                     if self.config.read().unwrap().auto_train {

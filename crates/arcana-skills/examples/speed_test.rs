@@ -13,6 +13,8 @@ fn main() {
     c.self_study = true;
     c.study_workers = a[2].parse().unwrap();
     c.wiki_langs = vec![];
+    c.obey_robots = false;
+    if let Some(o) = a.get(4) { c.study_only = o.clone(); }
     let cfg = Arc::new(RwLock::new(c));
     k.start_explorer(cfg, Arc::new(|_| {}));
     std::thread::sleep(std::time::Duration::from_secs(a[3].parse().unwrap()));

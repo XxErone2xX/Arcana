@@ -164,7 +164,7 @@ impl CrawlSettings {
             explore_web: c.explore_web || only.is_some(),
             blocked_domains: c.blocked_domains.clone(),
             site_delay_secs: c.site_delay_secs,
-            // 한 사이트만 공부할 땐 그 사이트를 하루에 더 많이 읽음
+            // 한 사이트만 공부할 땐 그 사이트를 하루에 더 많이 읽음 (규칙을 안 지키는 설정이면 한도 없음)
             site_daily_limit: if only.is_some() { c.site_daily_limit.max(5000) } else { c.site_daily_limit.max(1) },
             only,
             obey_robots: c.obey_robots,
@@ -317,6 +317,8 @@ pub struct Knowledge {
     io_lock: Mutex<()>,
     add_lock: Mutex<()>,
     frontier_saved: Mutex<Option<Instant>>,
+    /// 사이트가 429/503 으로 잠깐 쉬라고 한 시각까지
+    site_backoff: Mutex<HashMap<String, Instant>>,
     /// 위키백과 API 를 동시에 부르는 수 (위키미디어 이용 수칙: 너무 많이 동시에 부르지 않기)
     wiki_inflight: Mutex<usize>,
     /// 여러 사이트에 걸친 연속 연결 실패 (5번이면 진짜 인터넷 문제로 보고 쉼)
@@ -460,6 +462,7 @@ impl Knowledge {
             io_lock: Mutex::new(()),
             add_lock: Mutex::new(()),
             frontier_saved: Mutex::new(None),
+            site_backoff: Mutex::new(HashMap::new()),
             wiki_inflight: Mutex::new(0),
             sitemap_done: Mutex::new(HashMap::new()),
             page_hash: Mutex::new(std::fs::read_to_string(dir.join("page_hashes.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()),
@@ -982,7 +985,7 @@ impl Knowledge {
                 *t = (d, HashMap::new());
                 self.site_fail.lock().unwrap().clear();
             }
-            if *t.1.get(&host).unwrap_or(&0) >= s.site_daily_limit {
+            if s.obey_robots && *t.1.get(&host).unwrap_or(&0) >= s.site_daily_limit {
                 return Ok(Step::Skip);
             }
         }
@@ -1001,10 +1004,14 @@ impl Knowledge {
             }
             Duration::from_secs(robots.crawl_delay.unwrap_or(0).max(s.site_delay_secs).min(120))
         } else {
-            Duration::from_secs(s.site_delay_secs.max(1))
+            Duration::from_secs(s.site_delay_secs) // 규칙을 안 지키는 설정: 간격 없이 (설정 파일 site_delay_secs 로 조절)
         };
-        // 같은 사이트를 여러 일꾼이 동시에 읽지 않게: 확인과 기록을 한 번에
-        {
+        // 사이트가 "너무 많이 읽는다"(429/503)고 하면 그때만 잠깐 쉼
+        if self.site_backoff.lock().unwrap().get(&host).map_or(false, |t| Instant::now() < *t) {
+            return Ok(Step::Later);
+        }
+        // 간격이 있으면: 같은 사이트를 여러 일꾼이 동시에 읽지 않게 확인과 기록을 한 번에
+        if !delay.is_zero() {
             let mut last = self.site_last.lock().unwrap();
             if last.get(&host).map_or(false, |t| t.elapsed() < delay) {
                 return Ok(Step::Later);
@@ -1029,7 +1036,11 @@ impl Knowledge {
                 *self.net_fail_streak.lock().unwrap() = 0; // 서버가 대답은 했으니 인터넷은 됨
                 self.note_problem(&host, match code {
                     403 | 401 => format!("사이트가 접근을 거부했습니다 (HTTP {code}, 자동 수집 차단)"),
-                    429 => "너무 자주 읽어서 사이트가 잠시 막았습니다 (HTTP 429)".to_string(),
+                    429 | 503 => {
+                        // 사이트가 숨 고를 시간을 달라고 함 → 이 사이트만 30초 쉼
+                        self.site_backoff.lock().unwrap().insert(host.clone(), Instant::now() + Duration::from_secs(30));
+                        format!("너무 빨리 읽어서 사이트가 잠시 막았습니다 (HTTP {code}) — 30초 쉬고 다시")
+                    }
                     404 => "없는 페이지입니다 (HTTP 404)".to_string(),
                     _ => format!("사이트 오류 (HTTP {code})"),
                 });
@@ -1117,7 +1128,7 @@ impl Knowledge {
             }
             self.push_targets_front(items);
         } else if !page.nofollow || !s.obey_robots {
-            // 링크: 같은 사이트 4개 + 다른 사이트 10개 (한쪽으로 안 쏠리게, 여러 일꾼이 동시에 읽을 사이트가 많게)
+            // 링크: 같은 사이트 10개 + 다른 사이트 10개 (한쪽으로 안 쏠리게, 여러 일꾼이 동시에 읽을 사이트가 많게)
             let (mut same, mut other) = (0, 0);
             let mut items = Vec::new();
             for l in page
@@ -1126,7 +1137,7 @@ impl Knowledge {
                 .filter(|l| crawler::url_ok(l, &s.blocked_domains))
             {
                 let is_same = Self::host_of(l) == host;
-                if (is_same && same < 4) || (!is_same && other < 10) {
+                if (is_same && same < 10) || (!is_same && other < 10) {
                     if is_same {
                         same += 1
                     } else {
