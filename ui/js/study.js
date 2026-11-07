@@ -95,7 +95,8 @@ $("#q-skip").onclick = () => submit("/Skip");
 
 // "/" 명령어 목록
 attachPalette(input, [
-  { name: "/Start", desc: "스스로 학습 시작", icon: ICONS.play, alias: ["시작"], run: () => submit("/Start") },
+  { name: "/Start", desc: "스스로 학습 시작 — /Start (링크) 는 그 링크부터", icon: ICONS.play, alias: ["시작"], run: () => submit("/Start") },
+  { name: "/Start only", desc: "이 사이트에서만 공부 — /Start only (링크)", icon: ICONS.play, alias: ["만", "only"], needsArgs: true },
   { name: "/Stop", desc: "학습 멈추기", icon: ICONS.stop, alias: ["중지"], run: () => submit("/Stop") },
   { name: "/Status", desc: "지금까지 배운 것", icon: ICONS.chart, alias: ["상태"], run: () => submit("/Status") },
   { name: "/Skip", desc: "지금 질문 넘기기", icon: ICONS.skip, alias: ["넘기기"], run: () => submit("/Skip") },

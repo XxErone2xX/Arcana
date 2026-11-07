@@ -150,18 +150,58 @@ pub struct CrawlSettings {
     pub blocked_domains: Vec<String>,
     pub site_delay_secs: u64,
     pub site_daily_limit: usize,
+    /// 이 사이트에서만 공부 (/Start only)
+    pub only: Option<String>,
 }
 
 impl CrawlSettings {
     pub fn from(c: &Config) -> Self {
+        let only = Some(c.study_only.trim().to_string()).filter(|s| !s.is_empty());
         Self {
             wiki_langs: c.wiki_langs.clone(),
-            explore_web: c.explore_web,
+            explore_web: c.explore_web || only.is_some(),
             blocked_domains: c.blocked_domains.clone(),
             site_delay_secs: c.site_delay_secs,
-            site_daily_limit: c.site_daily_limit.max(1),
+            // 한 사이트만 공부할 땐 그 사이트를 하루에 더 많이 읽음
+            site_daily_limit: if only.is_some() { c.site_daily_limit.max(5000) } else { c.site_daily_limit.max(1) },
+            only,
         }
     }
+}
+
+/// 대기열 항목이 어느 사이트인지 ("블랙홀" → ko.wikipedia.org)
+fn item_host(item: &str) -> String {
+    match target(item) {
+        Target::Wiki(lang, _) => format!("{lang}.wikipedia.org"),
+        Target::Web(url) => url::Url::parse(&url).ok().and_then(|u| u.host_str().map(|h| h.to_lowercase())).unwrap_or_default(),
+    }
+}
+
+/// host 가 그 사이트(또는 그 하위 주소)인지
+pub fn host_matches(host: &str, site: &str) -> bool {
+    let host = host.trim_start_matches("www.");
+    host == site || host.ends_with(&format!(".{site}"))
+}
+
+/// 사용자가 준 링크 → 공부 범위로 쓸 사이트 이름 ("https://ko.wikipedia.org/wiki/X" → "wikipedia.org")
+pub fn site_of(url: &str) -> Option<String> {
+    let u = url::Url::parse(url).ok()?;
+    let host = u.host_str()?.to_lowercase();
+    let host = host.trim_start_matches("www.").trim_start_matches("m.").to_string();
+    if host == "wikipedia.org" || host.ends_with(".wikipedia.org") {
+        return Some("wikipedia.org".into()); // 위키백과는 언어 상관없이 위키백과 전체
+    }
+    Some(host)
+}
+
+/// 위키백과 문서 주소 → 대기열 항목 ("https://en.wikipedia.org/wiki/Black_hole" → "wiki:en:Black hole")
+pub fn wiki_item_of(url: &str) -> Option<String> {
+    let u = url::Url::parse(url).ok()?;
+    let host = u.host_str()?;
+    let lang = host.strip_suffix(".wikipedia.org")?.trim_start_matches("m.").split('.').next()?.to_string();
+    let title = u.path().strip_prefix("/wiki/")?;
+    let title = urlencoding::decode(title).ok()?.replace('_', " ");
+    (!title.is_empty() && !title.contains(':')).then(|| wiki_key(&lang, &title))
 }
 
 /// 다음에 읽을 곳: "블랙홀"(한국어 위키) / "wiki:en:Black hole" / "https://..."
@@ -618,6 +658,16 @@ impl Knowledge {
             items.extend(ext);
         }
         self.push_targets(items);
+    }
+
+    /// 이 주소부터 공부 (대기열 맨 앞에)
+    pub fn study_first(&self, url: &str) {
+        let item = wiki_item_of(url).unwrap_or_else(|| url::Url::parse(url).map(|u| crawler::canonical(&u)).unwrap_or_else(|_| url.to_string()));
+        let mut f = self.frontier.lock().unwrap();
+        f.queue.retain(|x| x != &item);
+        f.queue.push_front(item);
+        drop(f);
+        self.save_frontier();
     }
 
     fn save_frontier(&self) {
@@ -1257,7 +1307,15 @@ impl Knowledge {
         }
         let mut postponed = 0;
         for _ in 0..40 {
-            let Some(item) = self.frontier.lock().unwrap().queue.pop_front() else {
+            let next = {
+                let mut f = self.frontier.lock().unwrap();
+                match &s.only {
+                    // 한 사이트만: 대기열에서 그 사이트 것만 꺼냄 (나머지는 나중을 위해 그대로 둠)
+                    Some(site) => f.queue.iter().position(|it| host_matches(&item_host(it), site)).and_then(|i| f.queue.remove(i)),
+                    None => f.queue.pop_front(),
+                }
+            };
+            let Some(item) = next else {
                 return Ok(if postponed > 0 {
                     Studied::Wait
                 } else {
@@ -1370,6 +1428,20 @@ impl Knowledge {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_site_helpers() {
+        assert_eq!(site_of("https://ko.wikipedia.org/wiki/블랙홀").as_deref(), Some("wikipedia.org"));
+        assert_eq!(site_of("https://www.namu.wiki/w/X").as_deref(), Some("namu.wiki"));
+        assert_eq!(site_of("https://docs.python.org/3/").as_deref(), Some("docs.python.org"));
+        assert_eq!(wiki_item_of("https://en.wikipedia.org/wiki/Black_hole").as_deref(), Some("wiki:en:Black hole"));
+        assert_eq!(wiki_item_of("https://ko.wikipedia.org/wiki/%EB%B8%94%EB%9E%99%ED%99%80").as_deref(), Some("블랙홀"));
+        assert!(host_matches(&item_host("블랙홀"), "wikipedia.org"));
+        assert!(host_matches(&item_host("wiki:ja:科学"), "wikipedia.org"));
+        assert!(!host_matches(&item_host("https://namu.wiki/w/x"), "wikipedia.org"));
+        assert!(host_matches("www.namu.wiki", "namu.wiki"));
+        assert!(!host_matches("evilnamu.wiki", "namu.wiki"));
+    }
+
     use super::*;
 
     #[test]

@@ -434,8 +434,40 @@ impl Assistant {
             let (name, rest) = cmd.split_once(' ').unwrap_or((cmd, ""));
             match name.to_lowercase().as_str() {
                 "start" | "시작" => {
+                    // /Start · /Start (링크) · /Start only (링크)
+                    let rest = rest.trim();
+                    let (only, link) = match rest.split_once(char::is_whitespace) {
+                        Some((w, l)) if matches!(w.to_lowercase().as_str(), "only" | "만" | "에서만") => (true, l.trim()),
+                        _ if matches!(rest.to_lowercase().as_str(), "only" | "만") => (true, ""),
+                        _ => (false, rest),
+                    };
+                    let link = if !link.is_empty() && !link.contains("://") { format!("https://{link}") } else { link.to_string() };
+                    if only && link.is_empty() {
+                        lines.push("어느 사이트에서만 공부할지 링크를 함께 적어 주십시오. 예: /Start only https://ko.wikipedia.org".into());
+                        return StudyResult { lines, running: self.config.read().unwrap().self_study, question: k.current_question().map(|q| q.text()), stats: k.stats() };
+                    }
+                    if !link.is_empty() && (knowledge::site_of(&link).is_none() || !url::Url::parse(&link).map_or(false, |u| crawler::url_ok(&u, &self.config.read().unwrap().blocked_domains))) {
+                        lines.push(format!("'{link}'은(는) 공부할 수 없는 주소입니다. (잘못된 주소이거나 막힌 사이트)"));
+                        return StudyResult { lines, running: self.config.read().unwrap().self_study, question: k.current_question().map(|q| q.text()), stats: k.stats() };
+                    }
+                    {
+                        let mut c = self.config.write().unwrap();
+                        c.study_only = if only { knowledge::site_of(&link).unwrap_or_default() } else { String::new() };
+                        c.save(&self.data_dir);
+                    }
+                    if !link.is_empty() {
+                        k.study_first(&link);
+                    }
                     set_running(true);
-                    lines.push("학습을 시작합니다. 앱이 켜져 있는 동안 위키백과(한국어·영어·일본어)와 여러 웹사이트를 조금씩 읽으며 공부하겠습니다.".into());
+                    let site = self.config.read().unwrap().study_only.clone();
+                    if only {
+                        lines.push(format!("{site} 에서만 공부하겠습니다. {link} 부터 읽고, 그 사이트 안의 링크만 따라갑니다."));
+                        lines.push("다시 어디서든 공부하게 하려면 /Start 를 입력해 주십시오.".into());
+                    } else if !link.is_empty() {
+                        lines.push(format!("{link} 부터 읽기 시작해서, 거기서 이어지는 링크를 따라 공부하겠습니다."));
+                    } else {
+                        lines.push("학습을 시작합니다. 앱이 켜져 있는 동안 위키백과(한국어·영어·일본어)와 여러 웹사이트를 조금씩 읽으며 공부하겠습니다.".into());
+                    }
                     lines.push("쉬지 않고 계속 읽습니다. 사이트 규칙(robots.txt)은 지키고, 위험한 사이트는 건너뜁니다.".into());
                     lines.push("모르는 게 생기면 여기서 여쭤보겠습니다.".into());
                     if self.config.read().unwrap().auto_train {
@@ -457,6 +489,10 @@ impl Assistant {
                     ));
                     if !s.recent.is_empty() {
                         lines.push(format!("최근에 배운 것: {}", s.recent.join(", ")));
+                    }
+                    let only = self.config.read().unwrap().study_only.clone();
+                    if !only.is_empty() {
+                        lines.push(format!("공부 범위: {only} 에서만 (어디서든 공부하려면 /Start)"));
                     }
                     lines.push(autotrain::status_line(self));
                 }
@@ -496,6 +532,8 @@ impl Assistant {
                 _ => {
                     lines.push("사용할 수 있는 명령입니다.".into());
                     lines.push("/Start  스스로 학습 시작".into());
+                    lines.push("/Start (링크)  이 링크부터 읽기 시작해서 이어지는 곳을 공부".into());
+                    lines.push("/Start only (링크)  이 사이트에서만 공부 (위키백과 링크면 위키백과만)".into());
                     lines.push("/Stop   학습 멈추기".into());
                     lines.push("/Status 지금까지 배운 것".into());
                     lines.push("/Skip   지금 질문 넘기기".into());

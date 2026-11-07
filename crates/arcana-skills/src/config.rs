@@ -19,6 +19,8 @@ pub struct Config {
     pub show_debug: bool,
     /// 스스로 공부 중인지 (학습 탭의 /Start, /Stop). 켜두면 앱 다시 켜도 이어서 공부
     pub self_study: bool,
+    /// /Start only (링크): 이 사이트에서만 공부 (예: "wikipedia.org", "namu.wiki"). 비어 있으면 어디든
+    pub study_only: String,
     /// 자율 탐색 간격 (초). 0 = 쉬지 않고 계속
     pub study_interval_secs: u64,
     /// 공부할 위키백과 언어들 (ko=한국어, en=영어, ja=일본어 ...)
@@ -180,6 +182,7 @@ impl Default for Config {
             auto_update: true,
             show_debug: false,
             self_study: false,
+            study_only: String::new(),
             study_interval_secs: 0,
             wiki_langs: vec!["ko".into(), "en".into(), "ja".into()],
             explore_web: true,

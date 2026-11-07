@@ -19,6 +19,7 @@ fn main() {
         blocked_domains: vec![],
         site_delay_secs: 3,
         site_daily_limit: 100,
+        only: None,
     };
     for i in 0..12 {
         match k.study_step(&s) {
