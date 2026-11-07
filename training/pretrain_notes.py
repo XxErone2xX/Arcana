@@ -136,6 +136,15 @@ def load_corpus(kdir, max_chars):
         if src == "사용자" and not text.startswith(d.get("title", "")):
             text = f"{d['title']}: {text}"  # 직접 가르쳐 준 뜻은 "단어: 뜻" 형태로
         texts.append(text)
+    # 직접 넣은 글 (corpus 폴더의 .jsonl, 한 줄에 {"text": ...}) — 예: AI Hub 문서 변환본
+    cdir = os.path.join(HERE, "corpus")
+    if os.path.isdir(cdir):
+        for f in sorted(os.listdir(cdir)):
+            if f.endswith(".jsonl"):
+                extra = [r.get("text", "").strip() for r in read_jsonl(os.path.join(cdir, f))]
+                extra = [t for t in extra if korean_ratio(t) >= 0.5]
+                print(f"  corpus/{f}: {len(extra):,}개")
+                texts = extra + texts  # 앞에 둠 → 용량이 넘치면 공책 문서(최근)가 우선
     texts, tidy = tidy_corpus(texts)
     skipped.update(tidy)
     # 너무 많으면 최근 것 위주로 (메모리 보호)

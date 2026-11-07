@@ -70,7 +70,15 @@ pub fn material(a: &Assistant) -> Material {
         .unwrap_or(0);
     let kdir = a.data_dir.join("knowledge");
     let mine = count_lines(&kdir.join("taught.jsonl"), None) + count_lines(&kdir.join("feedback.jsonl"), Some("\"better\":\""));
-    Material { docs: a.knowledge.stats().count, pairs, mine }
+    let corpus = std::fs::read_dir(a.data_dir.join("training").join("corpus"))
+        .map(|rd| {
+            rd.flatten()
+                .filter(|e| e.path().extension().map_or(false, |x| x == "jsonl"))
+                .map(|e| count_lines(&e.path(), None))
+                .sum::<usize>()
+        })
+        .unwrap_or(0);
+    Material { docs: a.knowledge.stats().count + corpus, pairs, mine }
 }
 
 /// PC를 안 쓴 시간 (초). 윈도우가 아니면 항상 "안 쓰는 중"으로 봄

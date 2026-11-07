@@ -6,3 +6,4 @@ app/gen/
 training/chat_model*.pt
 training/out/
 training/data/
+training/corpus/

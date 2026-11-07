@@ -239,6 +239,7 @@ const TRAINING_FILES: &[(&str, &str)] = &[
     ("train.py", include_str!("../../../training/train.py")),
     ("train_chat.py", include_str!("../../../training/train_chat.py")),
     ("train_feedback.py", include_str!("../../../training/train_feedback.py")),
+    ("import_aihub_legal.py", include_str!("../../../training/import_aihub_legal.py")),
     ("requirements.txt", include_str!("../../../training/requirements.txt")),
     ("공책으로_학습하기.bat", include_str!("../../../training/공책으로_학습하기.bat")),
     ("큰모델_학습하기.bat", include_str!("../../../training/큰모델_학습하기.bat")),
@@ -249,6 +250,7 @@ const TRAINING_FILES: &[(&str, &str)] = &[
 pub fn install_training_tools(data_dir: &std::path::Path) -> std::io::Result<PathBuf> {
     let dir = data_dir.join("training");
     std::fs::create_dir_all(dir.join("data"))?;
+    std::fs::create_dir_all(dir.join("corpus"))?; // 직접 넣는 1단계 글 (AI Hub 문서 등)
     for (name, text) in TRAINING_FILES {
         // bat 파일은 윈도우 줄바꿈으로
         let body = if name.ends_with(".bat") { text.replace("\r\n", "\n").replace('\n', "\r\n") } else { text.to_string() };
