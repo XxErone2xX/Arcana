@@ -1,6 +1,6 @@
 // 빠른 호출 창 (기본 Alt+Shift+A)
 // 위 = Arcana (파랑·보라 물결), 아래 = 사용자.
-//  - 열면 사용자 쪽(아래)만 빛남. 나올 때 물결이 순간 빨라졌다가 Expo 로 원래 속도로
+//  - 열면 둘 다 검정, 입력을 시작하면 사용자 쪽(아래)이 빛남. 나올 때 물결이 순간 빨라졌다가 Expo 로 원래 속도로
 //  - Arcana가 생각·대답하는 동안: 위가 빛나고 아래는 연한 검정 (대답 중에 입력하면 둘 다 빛남)
 //  - 빛나는 쪽이 바뀌면 그쪽 물결이 순간 빨라지고, 검정 쪽은 느려짐
 //  - 사라질 때는 Expo 로 빨라지면서 사라짐
@@ -59,7 +59,6 @@ class Wave {
     this.side = side;
     this.pal = palette.map(hex);
     this.lit = new Tween(0);     // 1 = 빛남(원래 색·위치), 0 = 연한 검정 + 가장자리로 내려감
-    this.grow = new Tween(0);    // 0 = 숨김, 1 = 다 펼쳐짐 (나오기·사라지기)
     this.rest = new Tween(DARK_SPEED); // 평소 물결 속도 (빛나면 1, 검정이면 느리게)
     this.kick = new Kick();      // 순간 가속
     this.exit = new Tween(0);    // 사라질 때 Expo 로 빨라지는 정도
@@ -72,6 +71,10 @@ class Wave {
       { base: 0.24, amp: 0.07, freq: 3.1, speed: -1.3, phase: 4.4, alpha: 0.7, dark: 0.18 },
       { base: 0.13, amp: 0.05, freq: 4.2, speed: 1.6, phase: 0.9, alpha: 0.85, dark: 0.08 },
     ];
+    for (const L of this.layers) {
+      L.slide = new Tween(0); // 1 = 제자리, 0 = 화면 밖 (나오기·사라지기)
+      L.drop = new Tween(1);  // 1 = 검정이라 가장자리 쪽으로 내려가 있음, 0 = 원래 위치
+    }
   }
   resize() {
     const s = 0.5 * (window.devicePixelRatio || 1); // 절반 해상도 → 가볍고 자연스럽게 번짐
@@ -79,24 +82,36 @@ class Wave {
     this.c.height = Math.max(1, Math.round(this.c.clientHeight * s));
   }
   // 빛나기 / 검정 바꾸기. 빛나는 쪽은 순간 빨라졌다가 돌아오고, 검정 쪽은 느려짐
+  // 층마다 조금씩 시간차를 두고, 각 층이 통째로 가장자리 쪽(검정) / 원래 위치(빛남)로 이동
   setLit(on, now = performance.now()) {
     if ((this.lit.to === 1) === on) return;
     this.lit.set(on ? 1 : 0, 750, outExpo, now);
     this.rest.set(on ? 1 : DARK_SPEED, 1400, outExpo, now);
     if (on) this.kick.fire(SWITCH_KICK, 2000, now);
+    this.layers.forEach((L, i) => {
+      const order = on ? this.layers.length - 1 - i : i; // 빛날 땐 가장자리 층부터 올라옴
+      L.drop.set(on ? 0 : 1, 900, outExpo, now + order * 60);
+    });
   }
+  // 나타나기: 층이 하나씩 화면 밖에서 밀려 들어옴 (가장자리 층부터)
   enter(lit, now) {
     this.exit.jump(0);
     this.lit.jump(lit ? 1 : 0);
     this.rest.jump(lit ? 1 : DARK_SPEED);
-    this.grow.jump(0);
-    this.grow.set(1, 1100, outExpo, now);
+    const n = this.layers.length;
+    this.layers.forEach((L, i) => {
+      L.drop.jump(lit ? 0 : 1);
+      L.slide.jump(0);
+      L.slide.set(1, 1200, outExpo, now + (n - 1 - i) * 70);
+    });
     this.kick.fire(OPEN_KICK * (lit ? 1 : 0.6), 2400, now); // 나올 때: 순간 빨라졌다가 Expo 로 원래 속도
   }
+  // 사라지기: 안쪽 층부터 하나씩 화면 밖으로 빠져나감, Expo 로 빨라지면서
   leave(now) {
-    this.grow.set(0, 700, inExpo, now);   // 사라질 때: Expo 로 빨라지면서 사라짐
-    this.exit.set(CLOSE_SPEED, 700, inExpo, now);
+    this.layers.forEach((L, i) => L.slide.set(0, 650, inExpo, now + i * 45));
+    this.exit.set(CLOSE_SPEED, 650 + this.layers.length * 45, inExpo, now);
   }
+  gone(now) { return this.layers.every((L) => L.slide.to === 0 && L.slide.done(now)); }
   color(i, a, m, dark) {
     const [r, g, b] = this.pal[i % this.pal.length];
     // 검정(비활성)일 때는 연하게, 살짝 남색 기운이 남게
@@ -106,38 +121,32 @@ class Wave {
     const { x, c } = this;
     const w = c.width, h = c.height;
     const m = this.lit.value(now);
-    const g = this.grow.value(now);
     this.clock += dt * (this.rest.value(now) + this.kick.value(now) + this.exit.value(now));
     const t = this.clock;
     x.clearRect(0, 0, w, h);
-    if (g < 0.002) return;
     const top = this.side === "top";
     const steps = 72;
-    // 비활성(검정)일 때는 물결 층이 화면 가장자리 쪽으로 내려가 얇아짐, 활성이면 원래 위치
-    const sink = lerp(0.58, 1, m);
-    const edgeY = (L, px) => {
-      const u = px / w;
-      // 천천히 숨 쉬듯 높이·세기가 바뀌는 물결 (여러 사인파를 겹쳐서 반복이 티 나지 않게)
+    // 모든 계산은 "화면 가장자리에서 얼마나 떨어졌나(d)"로 하고, 위/아래에 맞춰 뒤집음
+    const Y = (d) => (top ? d : h - d);
+    this.layers.forEach((L, i) => {
+      // 층 하나를 모양 그대로 통째로 이동 (늘이거나 줄이지 않음)
+      const reach = (L.base * 1.12 + L.amp * 1.75) * h;
+      const off = (1 - L.slide.value(now)) * (reach + 4) + L.drop.value(now) * 0.42 * L.base * h;
+      if (off >= reach) return; // 완전히 화면 밖
+      const amp = L.amp * h * (1 + 0.28 * Math.sin(t * 0.37 + L.phase));
       const breathe = 1 + 0.07 * Math.sin(t * 0.21 + L.phase * 2) + 0.04 * Math.sin(t * 0.53 + L.phase);
-      const amp = L.amp * h * g * sink * (1 + 0.28 * Math.sin(t * 0.37 + L.phase));
-      const y = L.base * h * g * sink * breathe
+      const depth = (u) => L.base * h * breathe
         + amp * Math.sin(u * Math.PI * 2 * L.freq + t * L.speed + L.phase)
         + amp * 0.45 * Math.sin(u * Math.PI * 2 * L.freq * 0.47 - t * L.speed * 0.63 + L.phase * 1.3)
-        + amp * 0.18 * Math.sin(u * Math.PI * 2 * L.freq * 2.3 + t * L.speed * 1.7);
-      return top ? y : h - y;
-    };
-    this.layers.forEach((L, i) => {
+        + amp * 0.18 * Math.sin(u * Math.PI * 2 * L.freq * 2.3 + t * L.speed * 1.7)
+        - off;
       x.beginPath();
-      x.moveTo(-2, top ? -2 : h + 2);
-      for (let k = 0; k <= steps; k++) {
-        const px = (k / steps) * w;
-        x.lineTo(px, edgeY(L, px));
-      }
-      x.lineTo(w + 2, top ? -2 : h + 2);
+      x.moveTo(-2, Y(-2));
+      for (let k = 0; k <= steps; k++) x.lineTo((k / steps) * w, Y(depth(k / steps)));
+      x.lineTo(w + 2, Y(-2));
       x.closePath();
-      // 물결 끝까지 투명해지게 해서 가장자리에 선이 생기지 않게
-      const crest = (L.base * 1.12 + L.amp * 1.75) * h * g * sink;
-      const grad = x.createLinearGradient(0, top ? 0 : h, 0, top ? crest : h - crest);
+      // 색도 층과 같이 이동, 물결 끝까지 투명해지게 해서 가장자리에 선이 생기지 않게
+      const grad = x.createLinearGradient(0, Y(-off), 0, Y(reach - off));
       grad.addColorStop(0, this.color(i, L.alpha, m, L.dark));
       grad.addColorStop(0.5, this.color(i + 1, L.alpha * 0.5, m, L.dark));
       grad.addColorStop(0.82, this.color(i + 2, L.alpha * 0.12, m, L.dark));
@@ -160,7 +169,7 @@ function frame(now) {
   lastFrame = now;
   top.draw(now, dt);
   bottom.draw(now, dt);
-  const gone = closing && top.grow.done(now) && bottom.grow.done(now);
+  const gone = closing && top.gone(now) && bottom.gone(now);
   if (gone) {
     running = false;
     lastFrame = 0;
@@ -181,7 +190,7 @@ const st = { aiBusy: false, shown: false, typing: false };
 function update() {
   const now = performance.now();
   const aiLit = st.aiBusy || (st.shown && !st.typing);
-  const userLit = st.typing || (!st.aiBusy && !st.shown);
+  const userLit = st.typing; // 입력을 시작해야 빛남
   top.setLit(aiLit, now);
   bottom.setLit(userLit, now);
   document.body.classList.toggle("answering", st.aiBusy);
@@ -204,8 +213,8 @@ function open() {
   document.body.classList.remove("closed");
   Object.assign(st, { aiBusy: false, shown: false, typing: false });
   const now = performance.now();
-  top.enter(false, now);   // Arcana 쪽은 검정으로 시작
-  bottom.enter(true, now); // 사용자 쪽만 빛남
+  top.enter(false, now);    // 처음엔 둘 다 검정
+  bottom.enter(false, now);
   update();
   animate();
   setTimeout(() => q.focus(), 30);
