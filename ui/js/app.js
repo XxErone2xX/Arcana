@@ -260,6 +260,16 @@ async function checkUpdate(manual) {
   }
 }
 
+// 켤 때 자동 업데이트 (Rust 쪽에서 바로 확인 → 새 버전이면 받아서 다시 켬)
+api.onUpdating((v) => {
+  $("#overlay-text").textContent = `v${v}로 업데이트 중…`;
+  $("#overlay").hidden = false;
+});
+api.onUpdateFailed((e) => {
+  $("#overlay").hidden = true;
+  addMsg("bot", "업데이트하지 못했습니다. " + e, { error: true });
+});
+
 // ───────────── 시작 ─────────────
 (async () => {
   info = await ready(); // 앱이 다 켜질 때까지 기다림 (안 그러면 설정 화면이 기본값으로 보임)
@@ -269,6 +279,5 @@ async function checkUpdate(manual) {
   input.placeholder = `${info.name}에게 말하기`;
   if (info.hotkey_enabled && info.hotkey) $("#hint").textContent = `Enter 보내기 · Shift+Enter 줄바꿈 · 어디서든 ${info.hotkey}로 부르기`;
   input.focus();
-  checkUpdate(false);
 })();
 

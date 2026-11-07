@@ -29,6 +29,8 @@ export const api = isApp
       containerClear: () => invoke("container_clear"),
       quickHide: () => invoke("quick_hide"),
       onQuick: (cb) => T.event.listen("arcana://quick", (e) => cb(e.payload)),
+      onUpdating: (cb) => T.event.listen("arcana://updating", (e) => cb(e.payload)),
+      onUpdateFailed: (cb) => T.event.listen("arcana://update-failed", (e) => cb(e.payload)),
       onEvent: (cb) => T.event.listen("arcana://event", (e) => cb(e.payload)),
       window: {
         minimize: () => T.window.getCurrentWindow().minimize(),
@@ -79,6 +81,8 @@ function mock() {
     async containerClear() {},
     async quickHide() { document.body.classList.add("closed"); },
     onQuick() {},
+    onUpdating() {},
+    onUpdateFailed() {},
     async setOption() {}, async openConfig() {}, async reloadConfig() {},
     async checkUpdate() { return { available: false, current: "preview", latest: "preview" }; },
     async applyUpdate() {},

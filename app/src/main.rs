@@ -372,6 +372,33 @@ fn data_dir(app: &AppHandle) -> PathBuf {
         })
 }
 
+/// 켤 때마다 새 버전이 있는지 보고, 있으면 받아서 새 버전으로 다시 켬 (설정의 자동 업데이트가 켜져 있을 때)
+fn start_auto_update(app: AppHandle) {
+    if cfg!(debug_assertions) || std::env::args().any(|a| a == updater::RESTART_FLAG) {
+        return; // 개발 중이거나 방금 업데이트하고 다시 켜진 거면 건너뜀
+    }
+    let dir = data_dir(&app);
+    std::thread::spawn(move || {
+        if !arcana_skills::Config::load_or_create(&dir).auto_update {
+            return;
+        }
+        let Ok(info) = updater::check() else { return };
+        if !info.available {
+            return;
+        }
+        let _ = app.emit("arcana://updating", &info.latest); // 화면에 "업데이트 중" 표시
+        match updater::apply(&info) {
+            Ok(()) => {
+                updater::relaunch();
+                app.exit(0);
+            }
+            Err(e) => {
+                let _ = app.emit("arcana://update-failed", e);
+            }
+        }
+    });
+}
+
 fn main() {
     // 업데이트 직후 재시작이면 이전 프로세스가 완전히 꺼질 때까지 잠깐 대기
     if std::env::args().any(|a| a == updater::RESTART_FLAG) {
@@ -388,6 +415,8 @@ fn main() {
             }
         }))
         .setup(|app| {
+            // 켤 때마다 자동 업데이트: 무거운 준비(모델·공책 불러오기)와 상관없이 바로 확인
+            start_auto_update(app.handle().clone());
             let handle = app.handle().clone();
             let events: arcana_skills::EventSink = Arc::new(move |e: Event| {
                 if let (Event::Alert { .. }, Some(w)) = (&e, handle.get_webview_window("main")) {

@@ -62,7 +62,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "arcana"
-version = "0.9.6"
+version = "0.9.8"
 dependencies = [
  "arcana-core",
  "arcana-skills",
@@ -81,7 +81,7 @@ dependencies = [
 
 [[package]]
 name = "arcana-core"
-version = "0.9.6"
+version = "0.9.8"
 dependencies = [
  "serde",
  "serde_json",
@@ -89,7 +89,7 @@ dependencies = [
 
 [[package]]
 name = "arcana-skills"
-version = "0.9.6"
+version = "0.9.8"
 dependencies = [
  "arcana-core",
  "chrono",

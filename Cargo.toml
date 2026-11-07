@@ -7,7 +7,7 @@ resolver = "2"
 members = ["crates/arcana-core", "crates/arcana-skills", "app"]
 
 [workspace.package]
-version = "0.9.8"           # ← 릴리스할 때 이것만 올리면 됨
+version = "0.9.9"           # ← 릴리스할 때 이것만 올리면 됨
 edition = "2021"
 authors = ["얼로니"]
 license = "MIT"
