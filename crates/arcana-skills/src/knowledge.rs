@@ -319,6 +319,8 @@ pub struct Knowledge {
     frontier_saved: Mutex<Option<Instant>>,
     /// 사이트가 429/503 으로 잠깐 쉬라고 한 시각까지
     site_backoff: Mutex<HashMap<String, Instant>>,
+    /// 사이트가 막을 때마다 늘어나는 간격(밀리초). 잘 읽히면 다시 줄어듦
+    site_slow: Mutex<HashMap<String, u64>>,
     /// 위키백과 API 를 동시에 부르는 수 (위키미디어 이용 수칙: 너무 많이 동시에 부르지 않기)
     wiki_inflight: Mutex<usize>,
     /// 여러 사이트에 걸친 연속 연결 실패 (5번이면 진짜 인터넷 문제로 보고 쉼)
@@ -463,6 +465,7 @@ impl Knowledge {
             add_lock: Mutex::new(()),
             frontier_saved: Mutex::new(None),
             site_backoff: Mutex::new(HashMap::new()),
+            site_slow: Mutex::new(HashMap::new()),
             wiki_inflight: Mutex::new(0),
             sitemap_done: Mutex::new(HashMap::new()),
             page_hash: Mutex::new(std::fs::read_to_string(dir.join("page_hashes.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()),
@@ -1004,7 +1007,8 @@ impl Knowledge {
             }
             Duration::from_secs(robots.crawl_delay.unwrap_or(0).max(s.site_delay_secs).min(120))
         } else {
-            Duration::from_secs(s.site_delay_secs) // 규칙을 안 지키는 설정: 간격 없이 (설정 파일 site_delay_secs 로 조절)
+            // 규칙을 안 지키는 설정: 간격 없이. 단 사이트가 막기 시작하면 그 사이트만 스스로 천천히
+            Duration::from_secs(s.site_delay_secs).max(Duration::from_millis(*self.site_slow.lock().unwrap().get(&host).unwrap_or(&0)))
         };
         // 사이트가 "너무 많이 읽는다"(429/503)고 하면 그때만 잠깐 쉼
         if self.site_backoff.lock().unwrap().get(&host).map_or(false, |t| Instant::now() < *t) {
@@ -1030,16 +1034,32 @@ impl Knowledge {
             Ok(r) => {
                 *self.net_fail_streak.lock().unwrap() = 0;
                 self.site_fail.lock().unwrap().remove(&host);
+                self.site_problem.lock().unwrap().remove(&host); // 다시 잘 됨
+                // 잘 읽히면 간격을 조금씩 다시 줄임
+                if let Some(v) = self.site_slow.lock().unwrap().get_mut(&host) {
+                    *v = *v * 9 / 10;
+                }
                 r
             }
             Err(ureq::Error::Status(code, _)) => {
                 *self.net_fail_streak.lock().unwrap() = 0; // 서버가 대답은 했으니 인터넷은 됨
                 self.note_problem(&host, match code {
-                    403 | 401 => format!("사이트가 접근을 거부했습니다 (HTTP {code}, 자동 수집 차단)"),
+                    403 | 401 => {
+                        let mut sl = self.site_slow.lock().unwrap();
+                        let v = sl.entry(host.clone()).or_insert(0);
+                        *v = (*v * 2).clamp(1000, 60_000);
+                        format!("사이트가 접근을 거부했습니다 (HTTP {code}, 자동 수집 차단 — 이 사이트를 너무 빨리 읽어서 잠시 막혔을 수 있습니다)")
+                    }
                     429 | 503 => {
                         // 사이트가 숨 고를 시간을 달라고 함 → 이 사이트만 30초 쉼
                         self.site_backoff.lock().unwrap().insert(host.clone(), Instant::now() + Duration::from_secs(30));
-                        format!("너무 빨리 읽어서 사이트가 잠시 막았습니다 (HTTP {code}) — 30초 쉬고 다시")
+                        let ms = {
+                            let mut sl = self.site_slow.lock().unwrap();
+                            let v = sl.entry(host.clone()).or_insert(0);
+                            *v = (*v * 2).clamp(500, 60_000);
+                            *v
+                        };
+                        format!("너무 빨리 읽어서 사이트가 막았습니다 (HTTP {code}) — 30초 쉬고, 이 사이트는 {:.1}초 간격으로 천천히 읽겠습니다", ms as f64 / 1000.0)
                     }
                     404 => "없는 페이지입니다 (HTTP 404)".to_string(),
                     _ => format!("사이트 오류 (HTTP {code})"),
@@ -1683,6 +1703,7 @@ impl Knowledge {
         {
             std::thread::sleep(Duration::from_secs(3 + id as u64 / 4));
             let mut last_q: Option<Question> = None;
+            let mut last_problem: Option<String> = None;
             loop {
                 let (on, interval, settings) = {
                     let c = config.read().unwrap();
@@ -1723,6 +1744,16 @@ impl Knowledge {
                         300
                     }
                 };
+                // 한 사이트만 공부하다 그 사이트에 문제가 생기면 바로 알림
+                if id == 0 {
+                    if let Some(site) = &settings.only {
+                        let p = me.site_problem(site);
+                        if p.is_some() && p != last_problem {
+                            events(Event::StudyLog { text: format!("{site}: {}", p.as_ref().unwrap()) });
+                        }
+                        last_problem = p;
+                    }
+                }
                 let q = if id == 0 { me.current_question() } else { None };
                 if q.is_some() && q != last_q {
                     events(Event::Question {

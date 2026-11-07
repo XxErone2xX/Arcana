@@ -500,6 +500,9 @@ impl Assistant {
                     let only = self.config.read().unwrap().study_only.clone();
                     if !only.is_empty() {
                         lines.push(format!("공부 범위: {only} 에서만 (어디서든 공부하려면 /Start)"));
+                        if let Some(p) = k.site_problem(&only) {
+                            lines.push(format!("{only} 상태: {p}"));
+                        }
                     }
                     lines.push(autotrain::status_line(self));
                 }
