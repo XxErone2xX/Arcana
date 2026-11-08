@@ -254,6 +254,8 @@ pub enum Studied {
     Wait,
     /// 읽을 게 없거나 오늘 한도
     Idle,
+    /// 새 링크는 떨어졌지만 목록 페이지를 곧 다시 읽을 수 있음 (몇 초 뒤 다시)
+    Soon,
 }
 
 /// 채팅에서 읽은 웹페이지
@@ -321,6 +323,9 @@ pub struct Knowledge {
     io_lock: Mutex<()>,
     add_lock: Mutex<()>,
     frontier_saved: Mutex<Option<Instant>>,
+    /// 링크가 많은 목록 페이지 (주소 → 마지막으로 읽은 시각). 한 사이트만 공부하다 새 링크가
+    /// 떨어지면 여기를 다시 읽어서 새로 올라온 글을 찾음 (지식iN 질문 목록 같은 곳)
+    hubs: Mutex<HashMap<String, Instant>>,
     /// 사이트가 429/503 으로 잠깐 쉬라고 한 시각까지
     site_backoff: Mutex<HashMap<String, Instant>>,
     /// 위키백과 API 를 동시에 부르는 수 (위키미디어 이용 수칙: 너무 많이 동시에 부르지 않기)
@@ -469,6 +474,7 @@ impl Knowledge {
             add_lock: Mutex::new(()),
             frontier_saved: Mutex::new(None),
             site_backoff: Mutex::new(HashMap::new()),
+            hubs: Mutex::new(HashMap::new()),
             wiki_inflight: Mutex::new(0),
             sitemap_done: Mutex::new(HashMap::new()),
             page_hash: Mutex::new(std::fs::read_to_string(dir.join("page_hashes.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()),
@@ -686,7 +692,10 @@ impl Knowledge {
             if seen.insert(t.clone()) {
                 f.queue.push_front(t);
                 while f.queue.len() > FRONTIER_MAX {
-                    f.queue.pop_back();
+                    // 넘쳐서 버리는 주소는 "본 적 있음"에서도 지움 → 나중에 다시 발견하면 넣을 수 있게
+                    if let Some(x) = f.queue.pop_back() {
+                        seen.remove(&x);
+                    }
                 }
             }
         }
@@ -751,6 +760,28 @@ impl Knowledge {
                 return added;
             }
         }
+        // 목록 페이지 다시 읽기 (1분 넘게 안 본 것) → 그사이 새로 올라온 글 링크를 찾음.
+        // 예전엔 한 번 본 주소는 앱을 끌 때까지 다시 안 봐서, 링크가 떨어지면 멈추고 껐다 켜야 다시 됐음
+        let hubs: Vec<String> = {
+            let h = self.hubs.lock().unwrap();
+            let mut v: Vec<(&String, &Instant)> = h
+                .iter()
+                .filter(|(u, t)| t.elapsed() > Duration::from_secs(60) && Url::parse(u).map_or(false, |u| host_matches(u.host_str().unwrap_or(""), site)))
+                .collect();
+            v.sort_by_key(|(_, t)| **t); // 가장 오래 안 본 것부터
+            v.into_iter().take(20).map(|(u, _)| u.clone()).collect()
+        };
+        if !hubs.is_empty() {
+            let mut h = self.hubs.lock().unwrap();
+            let mut f = self.frontier.lock().unwrap();
+            for u in &hubs {
+                h.insert(u.clone(), Instant::now()); // 다른 일꾼이 같은 걸 또 넣지 않게
+                if !f.queue.contains(u) {
+                    f.queue.push_front(u.clone());
+                }
+            }
+            return hubs.len();
+        }
         // 예전에 읽은 페이지 다시 확인 (마지막으로 본 지 하루 넘은 것, 최대 30개)
         let cutoff = (chrono::Local::now() - chrono::Duration::hours(24)).format("%Y-%m-%d %H:%M").to_string();
         let recent = self.refreshed.lock().unwrap().clone();
@@ -772,6 +803,10 @@ impl Knowledge {
             }
         }
         n
+    }
+
+    fn has_hubs(&self, site: &str) -> bool {
+        self.hubs.lock().unwrap().keys().any(|u| Url::parse(u).map_or(false, |u| host_matches(u.host_str().unwrap_or(""), site)))
     }
 
     fn note_problem(&self, host: &str, why: impl Into<String>) {
@@ -1151,16 +1186,26 @@ impl Knowledge {
 
         let only_here = s.only.as_deref().map_or(false, |site| host_matches(host.split(':').next().unwrap_or(&host), site));
         if only_here && (!page.nofollow || !s.obey_robots) {
-            // 한 사이트만 공부: 그 사이트 링크를 많이(최대 60개), 맨 앞에 넣음
-            let mut items: Vec<String> = page
+            // 한 사이트만 공부: 그 사이트 링크를 많이, 맨 앞에 넣음
+            let mut all: Vec<String> = page
                 .links
                 .iter()
                 .filter(|l| crawler::url_ok(l, &s.blocked_domains) && Self::host_of(l) == host)
                 .map(crawler::canonical)
                 .collect();
-            items.dedup();
-            items.truncate(60);
-            if items.is_empty() && page.text.chars().count() < 50 {
+            all.dedup();
+            // 링크가 많은 페이지(목록·메인)는 기억해 뒀다가 새 링크가 떨어지면 다시 읽음
+            if all.len() >= 10 {
+                let key = raw.strip_suffix("#retry").unwrap_or(raw).to_string();
+                self.hubs.lock().unwrap().insert(key, Instant::now());
+            }
+            // 이미 본 링크(메뉴·상단 링크 등)는 빼고, 페이지의 링크를 거의 다(최대 300개) — 예전엔 먼저 60개를 자르고 걸러서,
+            // 페이지 맨 위 메뉴 링크만 계속 걸리고 실제 글 링크는 잘려 나가 새로 읽을 곳이 말라 버렸음
+            let items: Vec<String> = {
+                let seen = self.seen.lock().unwrap();
+                all.iter().filter(|x| !seen.contains(*x)).take(300).cloned().collect()
+            };
+            if all.is_empty() && page.text.chars().count() < 50 {
                 self.note_problem(&host, "페이지에서 내용·링크를 찾지 못했습니다 (자바스크립트로 화면을 그리는 사이트일 수 있습니다)");
             }
             self.push_targets_front(items);
@@ -1634,6 +1679,10 @@ impl Knowledge {
                         if self.refill_site(site, s) > 0 {
                             continue;
                         }
+                        // 목록 페이지가 잠깐 쉬는 중이면 10분 쉬지 말고 곧 다시
+                        if self.has_hubs(site) {
+                            return Ok(Studied::Soon);
+                        }
                     }
                 }
                 return Ok(if postponed > 0 {
@@ -1739,6 +1788,7 @@ impl Knowledge {
                         interval
                     }
                     Ok(Studied::Wait) => 0, // 아래에서 0.2초만 쉼
+                    Ok(Studied::Soon) => 10,
                     Ok(Studied::Idle) if id != 0 => 30, // 다른 일꾼은 조용히 잠깐 쉼
                     Err(_) if id != 0 => 60,
                     Ok(Studied::Idle) => {

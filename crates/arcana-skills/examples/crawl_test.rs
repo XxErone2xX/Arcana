@@ -25,7 +25,7 @@ fn main() {
     for i in 0..12 {
         match k.study_step(&s) {
             Ok(Studied::Learned { title, site }) => println!("[{i}] 배움: {title}  ({site})"),
-            Ok(Studied::Wait) => {
+            Ok(Studied::Wait | Studied::Soon) => {
                 println!("[{i}] 사이트 간격 대기");
                 std::thread::sleep(std::time::Duration::from_secs(3));
             }

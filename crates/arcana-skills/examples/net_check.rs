@@ -42,7 +42,7 @@ fn main() {
     for _ in 0..3 {
         match k.study_step(&s) {
             Ok(Studied::Learned { title, site }) => println!("배움: {title} ({site})"),
-            Ok(Studied::Wait) => println!("대기"),
+            Ok(Studied::Wait | Studied::Soon) => println!("대기"),
             Ok(Studied::Idle) => println!("없음"),
             Err(e) => println!("오류: {e}"),
         }
