@@ -196,6 +196,34 @@ pub fn content_ok(title: &str, summary: &str) -> bool {
 }
 
 /// 같은 페이지를 다른 주소로 두 번 읽지 않게 정리 (#뒤 제거, 끝의 / 정리)
+/// 주소만 보고 짐작하는 페이지 종류: 1 = 글(질문·기사·문서), -1 = 목록·태그·프로필·검색, 0 = 모름
+/// 예) kin.naver.com/qna/detail.naver?docId=495870284 → 1, /qna/list.naver?dirId=7 → -1
+pub fn page_kind(raw: &str) -> i32 {
+    let Ok(u) = Url::parse(raw.trim_start_matches("refresh:")) else { return 0 };
+    let path = u.path().to_lowercase();
+    let query = u.query().unwrap_or("").to_lowercase();
+    let segs: Vec<&str> = path.split(|c: char| c == '/' || c == '.' || c == '_' || c == '-').filter(|x| !x.is_empty()).collect();
+    const LIST: &[&str] = &[
+        "list", "lists", "tag", "tags", "tagdetail", "profile", "userinfo", "user", "users", "member", "members",
+        "search", "category", "categories", "rank", "ranking", "login", "signup", "join", "expert",
+        "directoryexpertlist", "answerlist", "questionlist", "index", "archive", "archives", "page", "feed", "partnercenter",
+    ];
+    const POST: &[&str] = &["detail", "view", "read", "article", "articles", "post", "posts", "story", "news", "entry", "wiki", "w", "doc", "docs", "question", "questions", "qna", "answer", "thread"];
+    if segs.iter().any(|x| LIST.contains(x)) || segs.iter().any(|x| x.ends_with("list")) {
+        return -1;
+    }
+    // 글 번호처럼 보이는 긴 숫자 (docId=495870284, /article/123456)
+    let long_num = |t: &str| t.split(|c: char| !c.is_ascii_digit()).any(|n| n.len() >= 5);
+    let id_param = query.split('&').any(|kv| {
+        let (k, v) = kv.split_once('=').unwrap_or((kv, ""));
+        (k.ends_with("id") || k.ends_with("no") || k == "p" || k == "idx") && k != "dirid" && k != "d1id" && long_num(v)
+    });
+    if id_param || segs.iter().any(|x| long_num(x)) || segs.iter().any(|x| POST.contains(x)) && segs.len() >= 2 {
+        return 1;
+    }
+    0
+}
+
 pub fn canonical(u: &Url) -> String {
     let mut u = u.clone();
     u.set_fragment(None);
@@ -453,6 +481,18 @@ pub fn parse_html(html: &str, base: &Url) -> Page {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kinds() {
+        assert_eq!(page_kind("https://kin.naver.com/qna/detail.naver?d1id=7&dirId=70103&docId=495870284&answerNo=1"), 1);
+        assert_eq!(page_kind("https://kin.naver.com/qna/list.naver?dirId=7"), -1);
+        assert_eq!(page_kind("https://kin.naver.com/tag/tagDetail.naver?tag=x"), -1);
+        assert_eq!(page_kind("https://kin.naver.com/profile/index.naver?u=abc"), -1);
+        assert_eq!(page_kind("https://kin.naver.com/qna/directoryExpertList.naver?dirId=7"), -1);
+        assert_eq!(page_kind("https://namu.wiki/w/블랙홀"), 1);
+        assert_eq!(page_kind("https://example.com/news/2026/11/some-story-123456"), 1);
+        assert_eq!(page_kind("https://example.com/"), 0);
+    }
 
     #[test]
     fn robots_rules() {

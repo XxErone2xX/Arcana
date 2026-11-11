@@ -239,3 +239,12 @@ svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width:
 .toasts { position: fixed; left: 50%; top: 52px; transform: translateX(-50%); display: flex; flex-direction: column; gap: 8px; z-index: 30; }
 .toast { padding: 9px 16px; border-radius: 20px; background: var(--text); color: var(--bg); font-size: 13px; box-shadow: var(--shadow); animation: fade .2s; white-space: nowrap; }
 .toast b { margin-right: 6px; }
+
+/* 외부 AI 설정 */
+.field .input, .field .select { width: 62%; padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); color: inherit; outline: 0; font: 12.5px var(--mono); }
+.field .select { font: 12.5px inherit; font-family: inherit; }
+.field .input:focus, .field .select:focus { border-color: var(--text-dim); }
+.api-fields[hidden], .field[hidden] { display: none; }
+/* 외부 AI가 만든 대답 표시 */
+.via { margin-top: 4px; font-size: 11px; color: var(--text-dim); opacity: .7; }
+.via::before { content: "↗ "; }

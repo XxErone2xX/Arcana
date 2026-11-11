@@ -72,6 +72,15 @@ pub struct Config {
     pub training_dir: String,
     /// (선택) Brave Search API 키 — 넣으면 채팅 검색이 일반 웹 전체에서 됨. 없으면 위키백과 + DuckDuckGo 요약
     pub brave_api_key: String,
+    /// 외부 AI API: "" = 사용 안 함, "openai"(OpenAI 호환), "anthropic", "gemini"
+    pub api_provider: String,
+    pub api_key: String,
+    /// 모델 이름 (예: claude-haiku-5-5, gemini 모델 이름, OpenRouter 모델 이름 등)
+    pub api_model: String,
+    /// 주소 (비우면 기본 주소). OpenAI 호환일 때 바꾸면 OpenRouter·Groq·Ollama 등
+    pub api_base: String,
+    /// "fallback" = Arcana가 모르는 말만 외부 AI가, "always" = 잡담은 전부 외부 AI가
+    pub api_mode: String,
     pub apps: BTreeMap<String, AppEntry>,
 }
 
@@ -196,6 +205,11 @@ impl Default for Config {
             site_delay_secs: 0,
             site_daily_limit: 100,
             brave_api_key: String::new(),
+            api_provider: String::new(),
+            api_key: String::new(),
+            api_model: String::new(),
+            api_base: String::new(),
+            api_mode: "fallback".into(),
             training_dir: String::new(),
             think_depth: 8,
             chat_temperature: 0.6,

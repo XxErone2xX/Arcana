@@ -102,6 +102,7 @@ async function showReply(reply, r, userText) {
     body.appendChild(box);
   }
   if (reply.from_chat && userText) body.appendChild(feedbackBar(userText, reply.text));
+  if (reply.via) body.appendChild(Object.assign(document.createElement("div"), { className: "via", textContent: reply.via }));
   scroller.follow();
   if (reply.quit) setTimeout(() => api.window.close(), 900);
 }

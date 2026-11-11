@@ -12,6 +12,7 @@ pub mod autotrain;
 pub mod config;
 pub mod context;
 pub mod crawler;
+pub mod external;
 pub mod knowledge;
 pub mod memory;
 pub mod net;
@@ -64,6 +65,8 @@ pub struct Context {
     pub knowledge: Option<Arc<knowledge::Knowledge>>,
     /// 메모리에 저장된 사용자 이름 (인사할 때 씀)
     pub user_name: Option<String>,
+    /// 최근 대화 (외부 AI에게 맥락으로 줌)
+    pub recent: Vec<context::Turn>,
 }
 
 impl Context {
@@ -87,6 +90,8 @@ pub struct Reply {
     pub error: bool,
     /// 대화 모델이 만든 대답인지 (UI가 👍/👎 버튼을 붙임)
     pub from_chat: bool,
+    /// 외부 AI가 만든 대답이면 그 이름 ("Claude · 모델") — UI가 작게 표시. 학습 재료로 안 씀
+    pub via: Option<String>,
 }
 
 impl Reply {
@@ -338,6 +343,7 @@ impl Assistant {
             talker: self.talker.read().unwrap().clone(),
             knowledge: Some(self.knowledge.clone()),
             user_name: if self.config.read().unwrap().memory_enabled { self.memory.name() } else { None },
+            recent: if self.config.read().unwrap().container_enabled { self.container.recent(6) } else { vec![] },
         }
     }
 
@@ -393,7 +399,11 @@ impl Assistant {
         let blocked = !intent_has_action_words(&u.intent, text);
         let fallback = u.confidence < threshold || blocked;
         // 4) 확신이 낮으면(잘 못 알아들음) 학습 탭에서 어떻게 대답할지 물어보기
-        if fallback && text.trim().chars().count() >= 2 {
+        let ext_always = {
+            let c = self.config.read().unwrap();
+            external::enabled(&c) && c.api_mode == "always"
+        };
+        if fallback && !ext_always && text.trim().chars().count() >= 2 {
             let q = knowledge::Question::Reply { phrase: text.trim().to_string() };
             if self.knowledge.ask(q.clone()) {
                 self.emit_question();

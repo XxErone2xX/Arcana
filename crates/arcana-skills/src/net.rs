@@ -159,6 +159,25 @@ pub fn get(url: &str, headers: &[(&str, &str)]) -> Result<ureq::Response, ureq::
     }
 }
 
+/// JSON POST (외부 AI API 등). 대답이 오래 걸릴 수 있어서 시간 제한을 따로 줌
+pub fn post_json(url: &str, headers: &[(&str, &str)], body: &serde_json::Value, timeout: Duration) -> Result<ureq::Response, ureq::Error> {
+    let a = agents();
+    let call = |agent: &ureq::Agent| {
+        let mut r = agent.post(url).timeout(timeout);
+        for (k, v) in headers {
+            r = r.set(k, v);
+        }
+        r.send_json(body.clone())
+    };
+    match &a.native {
+        Some(native) => match call(native) {
+            Err(e) if is_transport(&e) => call(&a.rustls).map_err(|_| e),
+            other => other,
+        },
+        None => call(&a.rustls),
+    }
+}
+
 /// 연결 진단 (/Diag): 사이트별로 두 가지 보안 연결 방식을 다 시험
 pub fn diagnose() -> Vec<String> {
     let a = agents();

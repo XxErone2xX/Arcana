@@ -704,6 +704,17 @@ impl Knowledge {
         self.save_frontier();
     }
 
+    /// 한 사이트만 공부할 때 목록 같은 페이지: 맨 뒤에 (대기열이 가득 차면 넣지 않음)
+    fn push_targets_back(&self, items: Vec<String>) {
+        let mut seen = self.seen.lock().unwrap();
+        let mut f = self.frontier.lock().unwrap();
+        for t in items {
+            if f.queue.len() < FRONTIER_MAX + 500 && seen.insert(t.clone()) {
+                f.queue.push_back(t);
+            }
+        }
+    }
+
     fn save_hashes(&self) {
         let h = self.page_hash.lock().unwrap();
         let _ = std::fs::write(self.dir.join("page_hashes.json"), serde_json::to_string(&*h).unwrap_or_default());
@@ -1195,7 +1206,7 @@ impl Knowledge {
                 .collect();
             all.dedup();
             // 링크가 많은 페이지(목록·메인)는 기억해 뒀다가 새 링크가 떨어지면 다시 읽음
-            if all.len() >= 10 {
+            if all.len() >= 10 && crawler::page_kind(raw) <= 0 {
                 let key = raw.strip_suffix("#retry").unwrap_or(raw).to_string();
                 self.hubs.lock().unwrap().insert(key, Instant::now());
             }
@@ -1208,6 +1219,13 @@ impl Knowledge {
             if all.is_empty() && page.text.chars().count() < 50 {
                 self.note_problem(&host, "페이지에서 내용·링크를 찾지 못했습니다 (자바스크립트로 화면을 그리는 사이트일 수 있습니다)");
             }
+            // 글(질문·기사·문서) 페이지는 맨 앞, 목록·태그·프로필 같은 페이지는 맨 뒤 (목록은 링크를 찾는 데만 쓰임)
+            let (mut posts, mut lists): (Vec<String>, Vec<String>) = (vec![], vec![]);
+            for it in items {
+                if crawler::page_kind(&it) > 0 { posts.push(it) } else { lists.push(it) }
+            }
+            self.push_targets_back(lists);
+            let items = posts;
             self.push_targets_front(items);
         } else if !page.nofollow || !s.obey_robots {
             // 링크: 같은 사이트 10개 + 다른 사이트 10개 (한쪽으로 안 쏠리게, 여러 일꾼이 동시에 읽을 사이트가 많게)
@@ -1231,6 +1249,10 @@ impl Knowledge {
             self.push_targets(items);
         }
         let generic = ["home", "홈", "index", "welcome", "main page", "untitled"];
+        // 목록·태그·프로필 페이지는 링크만 쓰고 공책에는 안 넣음 (제목·메뉴 글자뿐이라 학습에 쓸모없음)
+        if crawler::page_kind(raw) < 0 && page.links.len() >= 20 {
+            return Ok(Step::Skip);
+        }
         if (page.noindex && s.obey_robots)
             || page.title.chars().count() < 2
             || generic.contains(&page.title.to_lowercase().as_str())

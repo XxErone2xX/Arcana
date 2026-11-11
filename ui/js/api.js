@@ -28,6 +28,7 @@ export const api = isApp
       containerInfo: () => invoke("container_info"),
       containerClear: () => invoke("container_clear"),
       quickHide: () => invoke("quick_hide"),
+      apiTest: () => invoke("api_test"),
       onQuick: (cb) => T.event.listen("arcana://quick", (e) => cb(e.payload)),
       onUpdating: (cb) => T.event.listen("arcana://updating", (e) => cb(e.payload)),
       onUpdateFailed: (cb) => T.event.listen("arcana://update-failed", (e) => cb(e.payload)),
@@ -69,6 +70,7 @@ function mock() {
         capabilities: ["프로그램 켜기/끄기 — \"디코 켜줘\"", "타이머 — \"라면 3분 타이머\""],
         think_level: 3, memory_enabled: true, container_enabled: true, container_mb: 100,
         hotkey: "Alt+Shift+A", hotkey_enabled: true, hotkey_error: null,
+        api_provider: "", api_model: "", api_base: "", api_mode: "fallback", api_key_hint: "", api_enabled: false,
         auto_train: true, obey_robots: false, auto_train_idle_min: 10, auto_train_status: "자동 학습 켜짐 · 대화 재료 12쌍 · PC를 10분 안 쓰면 학습 · 아직 재료 부족 (대화 데이터 또는 가르친 대답 30개 필요)",
       };
     },
@@ -80,6 +82,7 @@ function mock() {
     async containerInfo() { return { used_bytes: 3_400_000, max_mb: 100, enabled: true, turns: 50 }; },
     async containerClear() {},
     async quickHide() { document.body.classList.add("closed"); },
+    async apiTest() { await new Promise((r) => setTimeout(r, 500)); return "(미리보기) 연결 성공: 연결되었습니다."; },
     onQuick() {},
     onUpdating() {},
     onUpdateFailed() {},

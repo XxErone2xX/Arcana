@@ -69,6 +69,7 @@ async function render() {
   $("#idle-label").textContent = `${info.auto_train_idle_min}분`;
   $("#autotrain-status").textContent = info.auto_train_status ?? "";
   renderThink(info.think_level);
+  renderApi(info);
   $("#caps").replaceChildren(...info.capabilities.map((c) => Object.assign(document.createElement("li"), { textContent: c })));
   rows($("#model-info"), [
     ["모델", "Arcana (처음부터 직접 만든 모델)"],
@@ -80,6 +81,30 @@ async function render() {
   rows($("#about"), r);
   renderFacts();
   renderContainer();
+}
+
+const API_HINT = {
+  openai: { model: "예: gpt-4o-mini, llama3.1 (Ollama)", base: "비우면 https://api.openai.com/v1 · Ollama: http://localhost:11434/v1" },
+  anthropic: { model: "예: claude-haiku-5-5, claude-sonnet-5-5", base: "" },
+  gemini: { model: "Google AI Studio의 모델 이름", base: "" },
+};
+
+function renderApi(info) {
+  const p = info.api_provider ?? "";
+  $("#api-provider").value = p;
+  $("#api-fields").hidden = !p;
+  if (!p) return;
+  const key = $("#api-key");
+  if (document.activeElement !== key) { key.value = ""; key.placeholder = info.api_key_hint ? `저장됨 ${info.api_key_hint} (바꾸려면 새로 입력)` : (p === "openai" ? "내 PC(Ollama 등)면 비워도 됨" : "API 키 붙여넣기"); }
+  const model = $("#api-model");
+  if (document.activeElement !== model) model.value = info.api_model ?? "";
+  model.placeholder = API_HINT[p].model;
+  $("#api-base-row").hidden = p !== "openai";
+  const base = $("#api-base");
+  if (document.activeElement !== base) base.value = info.api_base ?? "";
+  base.placeholder = API_HINT[p].base;
+  $("#api-mode").value = info.api_mode === "always" ? "always" : "fallback";
+  $("#api-status").textContent = info.api_enabled ? "사용 중입니다." : "API 키와 모델 이름을 넣으면 사용할 수 있습니다.";
 }
 
 function renderThink(level) {
@@ -180,6 +205,30 @@ export function initSettings(c) {
   bool("#opt-container", "container_enabled");
   bool("#opt-autotrain", "auto_train");
   bool("#opt-robots", "obey_robots");
+  // 외부 AI
+  const setStr = async (key, value) => {
+    try { await api.setValue(key, value); } catch (err) { ctx.toast(String(err)); }
+    refresh();
+  };
+  $("#api-provider").onchange = (e) => {
+    const p = e.target.value;
+    // AI를 바꾸면 그 AI의 기본 모델 이름으로 (Claude만 확실한 기본값이 있음)
+    if (p === "anthropic" && !$("#api-model").value) api.setValue("api_model", "claude-haiku-5-5");
+    setStr("api_provider", p);
+  };
+  $("#api-key").onchange = (e) => { if (e.target.value.trim()) { setStr("api_key", e.target.value.trim()); e.target.value = ""; ctx.toast("API 키를 저장했습니다"); } };
+  $("#api-model").onchange = (e) => setStr("api_model", e.target.value);
+  $("#api-base").onchange = (e) => setStr("api_base", e.target.value);
+  $("#api-mode").onchange = (e) => setStr("api_mode", e.target.value);
+  $("#api-test").onclick = async (e) => {
+    const b = e.currentTarget;
+    b.disabled = true;
+    $("#api-status").textContent = "연결하는 중…";
+    try { $("#api-status").textContent = await api.apiTest(); }
+    catch (err) { $("#api-status").textContent = String(err); }
+    b.disabled = false;
+  };
+
   const idle = $("#idle-range");
   idle.oninput = () => {
     idle.style.setProperty("--p", ((idle.value - 1) / 59) * 100 + "%");

@@ -40,6 +40,13 @@ struct Info {
     auto_train_status: String,
     /// 단축키 등록 실패 이유 (다른 프로그램이 쓰는 중 등)
     hotkey_error: Option<String>,
+    api_provider: String,
+    api_model: String,
+    api_base: String,
+    api_mode: String,
+    /// 키 자체는 안 보내고 끝 4자리만 ("••••abcd"), 없으면 빈 칸
+    api_key_hint: String,
+    api_enabled: bool,
 }
 
 #[derive(Serialize)]
@@ -121,6 +128,15 @@ fn info(app: AppHandle, state: State<AppState>) -> Info {
         auto_train_idle_min: c.auto_train_idle_min,
         auto_train_status,
         hotkey_error: state.hotkey_error.lock().unwrap().clone(),
+        api_provider: c.api_provider.clone(),
+        api_model: c.api_model.clone(),
+        api_base: c.api_base.clone(),
+        api_mode: c.api_mode.clone(),
+        api_key_hint: {
+            let k: Vec<char> = c.api_key.trim().chars().collect();
+            if k.is_empty() { String::new() } else { format!("••••{}", k[k.len().saturating_sub(4)..].iter().collect::<String>()) }
+        },
+        api_enabled: arcana_skills::external::enabled(&c),
     }
 }
 
@@ -139,6 +155,20 @@ fn set_value(app: AppHandle, state: State<AppState>, key: String, value: serde_j
             "auto_train" => c.auto_train = value.as_bool().ok_or("참/거짓이 필요합니다")?,
             "obey_robots" => c.obey_robots = value.as_bool().ok_or("참/거짓이 필요합니다")?,
             "auto_train_idle_min" => c.auto_train_idle_min = value.as_u64().ok_or("숫자가 필요합니다")?.clamp(1, 240),
+            "api_provider" => {
+                let v = value.as_str().ok_or("글자가 필요합니다")?;
+                if !arcana_skills::external::PROVIDERS.iter().any(|(k, _)| *k == v) {
+                    return Err("모르는 AI입니다".into());
+                }
+                c.api_provider = v.to_string();
+            }
+            "api_key" => c.api_key = value.as_str().ok_or("글자가 필요합니다")?.trim().to_string(),
+            "api_model" => c.api_model = value.as_str().ok_or("글자가 필요합니다")?.trim().to_string(),
+            "api_base" => c.api_base = value.as_str().ok_or("글자가 필요합니다")?.trim().to_string(),
+            "api_mode" => {
+                let v = value.as_str().ok_or("글자가 필요합니다")?;
+                c.api_mode = if v == "always" { "always".into() } else { "fallback".into() };
+            }
             "hotkey" => {
                 let k = value.as_str().ok_or("글자가 필요합니다")?.trim().to_string();
                 k.parse::<Shortcut>().map_err(|_| format!("'{k}'은(는) 단축키로 쓸 수 없습니다"))?;
@@ -160,6 +190,15 @@ fn set_value(app: AppHandle, state: State<AppState>, key: String, value: serde_j
         }
     }
     Ok(())
+}
+
+/// 외부 AI 연결 시험 (설정 → 모델 → 외부 AI)
+#[tauri::command]
+async fn api_test(state: State<'_, AppState>) -> Result<String, String> {
+    let c = state.assistant.config.read().unwrap().clone();
+    tauri::async_runtime::spawn_blocking(move || arcana_skills::external::test(&c))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 // ── 메모리 ──
@@ -493,7 +532,8 @@ fn main() {
             memory_clear,
             container_info,
             container_clear,
-            quick_hide
+            quick_hide,
+            api_test
         ])
         .run(tauri::generate_context!())
         .expect("앱 실행 실패");

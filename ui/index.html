@@ -177,6 +177,35 @@
             <div class="scale"><span>1분</span><span>60분</span></div>
             <p class="desc" id="autotrain-status" style="margin-top:10px"></p>
           </section>
+          <section class="group" id="sec-api">
+            <h2>외부 AI</h2>
+            <p class="desc">다른 AI의 API 키를 넣으면 대화를 그 AI에게 맡길 수 있습니다. 앱 열기·타이머 같은 명령은 언제나 Arcana가 직접 합니다. 외부 AI의 대답은 Arcana 학습에 쓰지 않습니다. 키는 이 PC의 설정 파일에만 저장됩니다.</p>
+            <div class="field">
+              <span>AI</span>
+              <select class="select" id="api-provider">
+                <option value="">사용 안 함</option>
+                <option value="openai">OpenAI 호환 (ChatGPT · OpenRouter · Groq · Ollama)</option>
+                <option value="anthropic">Anthropic (Claude)</option>
+                <option value="gemini">Google Gemini</option>
+              </select>
+            </div>
+            <div class="api-fields" id="api-fields">
+              <div class="field"><span>API 키</span><input class="input" id="api-key" type="password" autocomplete="off" spellcheck="false" /></div>
+              <div class="field"><span>모델</span><input class="input" id="api-model" autocomplete="off" spellcheck="false" /></div>
+              <div class="field" id="api-base-row"><span>주소</span><input class="input" id="api-base" autocomplete="off" spellcheck="false" placeholder="비우면 https://api.openai.com/v1" /></div>
+              <div class="field">
+                <span>언제 쓸까요</span>
+                <select class="select" id="api-mode">
+                  <option value="fallback">Arcana가 모르는 말만</option>
+                  <option value="always">대화는 전부</option>
+                </select>
+              </div>
+              <div class="row">
+                <button class="btn" id="api-test">연결 시험</button>
+              </div>
+              <p class="desc" id="api-status" style="margin-top:8px"></p>
+            </div>
+          </section>
           <section class="group">
             <h2>모델</h2>
             <dl class="about" id="model-info"></dl>

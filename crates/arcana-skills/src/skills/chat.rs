@@ -32,6 +32,21 @@ fn unfamiliar(cx: &Context) -> Reply {
     ]))
 }
 
+/// 외부 AI에게 대답을 받음. 실패하면 이유를 알리고 원래 방식(검색·질문)으로
+/// (외부 AI 대답은 Arcana 학습 재료로 안 씀 → from_chat 아님, 👍/👎 없음)
+fn external(cx: &Context) -> Reply {
+    let c = cx.cfg().clone();
+    cx.emit(crate::Event::Thinking { text: format!("{}에게 묻는 중…", crate::external::label(&c)) });
+    match crate::external::ask(&c, &cx.recent, cx.text.trim(), cx.user_name.as_deref()) {
+        Ok(t) => Reply { text: t, via: Some(crate::external::label(&c)), ..Default::default() },
+        Err(e) => {
+            let mut r = unfamiliar(cx);
+            r.text = format!("외부 AI에 연결하지 못했습니다. {e}\n\n{}", r.text);
+            r
+        }
+    }
+}
+
 /// 검색해 볼 만한 문장인지 ("ㅁㄴㅇㄹ", "qwerasdf" 같은 건 안 찾음)
 fn looks_meaningful(text: &str) -> bool {
     let syllables = text.chars().filter(|c| ('가'..='힣').contains(c)).count();
@@ -187,10 +202,18 @@ impl Skill for Chat {
             }),
             "thanks" => Reply::chat(pick(&["별말씀을요. 언제든 불러 주십시오.", "도움이 됐다니 다행입니다.", "천만의 말씀입니다. 또 필요한 게 있으시면 말씀해 주십시오."])),
             _ => {
+                let (ext, always) = {
+                    let c = cx.cfg();
+                    (crate::external::enabled(&c), c.api_mode == "always")
+                };
+                // 외부 AI 설정에서 "대화는 전부 외부 AI"
+                if ext && always {
+                    return external(cx);
+                }
                 // 잡담 → 대화 모델이 직접 대답
                 if let Some(t) = &cx.talker {
                     if t.familiarity(&cx.text) < cx.cfg().chat_min_familiarity {
-                        return unfamiliar(cx);
+                        return if ext { external(cx) } else { unfamiliar(cx) };
                     }
                     let (think, temp, top_k, long) = {
                         let c = cx.cfg();
@@ -200,8 +223,8 @@ impl Skill for Chat {
                         return Reply::chat(r.trim());
                     }
                 }
-                // 대화 모델이 없거나, 자연스럽게 대답할 자신이 없음 → 지어내지 않고 검색·질문
-                unfamiliar(cx)
+                // 대화 모델이 없거나, 자연스럽게 대답할 자신이 없음 → 외부 AI(설정했으면) 또는 검색·질문
+                if ext { external(cx) } else { unfamiliar(cx) }
             }
         }
     }
